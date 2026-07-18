@@ -3,6 +3,7 @@ use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
 use crate::decode::probe_metadata;
+use crate::key::to_camelot;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AnalysisState {
@@ -20,6 +21,7 @@ pub struct TrackEntry {
     pub duration_secs: Option<f64>,
     pub bpm: Option<f32>,
     pub key: Option<String>,
+    pub camelot: Option<String>,
     pub analysis: AnalysisState,
 }
 
@@ -33,6 +35,7 @@ impl TrackEntry {
             duration_secs: meta.duration_secs,
             bpm: None,
             key: None,
+            camelot: None,
             analysis: AnalysisState::Pending,
         }
     }
@@ -47,15 +50,48 @@ impl TrackEntry {
             .unwrap_or_else(|| "--:--".to_string())
     }
 
-    pub fn analysis_label(&self) -> String {
+    pub fn bpm_label(&self) -> String {
+        match (&self.analysis, self.bpm) {
+            (AnalysisState::Failed(msg), _) => format!("err: {msg}"),
+            (AnalysisState::Loading, _) => "…".to_string(),
+            (AnalysisState::Analyzing, _) => "…".to_string(),
+            (_, Some(bpm)) => format!("{bpm:.0}"),
+            (AnalysisState::Pending, _) => "—".to_string(),
+            (AnalysisState::Done, None) => "—".to_string(),
+        }
+    }
+
+    pub fn key_label(&self) -> String {
+        match (&self.analysis, &self.key) {
+            (AnalysisState::Failed(_), _) => "—".to_string(),
+            (AnalysisState::Loading | AnalysisState::Analyzing, _) => "…".to_string(),
+            (_, Some(key)) => key.clone(),
+            _ => "—".to_string(),
+        }
+    }
+
+    pub fn camelot_label(&self) -> String {
+        match (&self.analysis, &self.camelot) {
+            (AnalysisState::Failed(_), _) => "—".to_string(),
+            (AnalysisState::Loading | AnalysisState::Analyzing, _) => "…".to_string(),
+            (_, Some(camelot)) => camelot.clone(),
+            _ => "—".to_string(),
+        }
+    }
+
+    pub fn set_analysis_result(&mut self, bpm: f32, key: String) {
+        self.camelot = to_camelot(&key);
+        self.bpm = Some(bpm);
+        self.key = Some(key);
+        self.analysis = AnalysisState::Done;
+    }
+
+    pub fn status_label(&self) -> String {
         match &self.analysis {
-            AnalysisState::Pending => "…".to_string(),
+            AnalysisState::Pending => "—".to_string(),
             AnalysisState::Loading => "loading".to_string(),
             AnalysisState::Analyzing => "analyzing".to_string(),
-            AnalysisState::Done => match (self.bpm, &self.key) {
-                (Some(bpm), Some(key)) => format!("{bpm:.0} BPM · {key}"),
-                _ => "done".to_string(),
-            },
+            AnalysisState::Done => "done".to_string(),
             AnalysisState::Failed(msg) => format!("err: {msg}"),
         }
     }

@@ -6,6 +6,7 @@ use cpal::{Sample, SampleFormat, StreamConfig};
 
 use crate::decode::DecodedAudio;
 use crate::dev;
+use crate::eq::{EqGains, LiveEq};
 
 #[derive(Debug)]
 enum PlaybackCommand {
@@ -14,6 +15,7 @@ enum PlaybackCommand {
     Pause,
     SeekFrame(u64),
     SetVolume(f32),
+    SetEq(EqGains),
 }
 
 #[derive(Debug)]
@@ -43,17 +45,22 @@ impl PlaybackStatus {
 struct TrackBuffer {
     samples: Arc<[f32]>,
     channels: usize,
-    sample_rate: u32,
     duration_frames: u64,
 }
 
 struct SharedPlayback {
     track: Mutex<Option<TrackBuffer>>,
+    /// One LiveEq per output channel.
+    eq: Mutex<Vec<LiveEq>>,
     playhead_frame: AtomicU64,
     duration_frames: AtomicU64,
     sample_rate: AtomicU64,
     playing: AtomicBool,
     volume: AtomicU32,
+    eq_low: AtomicU32,
+    eq_low_mid: AtomicU32,
+    eq_hi_mid: AtomicU32,
+    eq_hi: AtomicU32,
     output_channels: usize,
     output_sample_rate: u32,
 }
@@ -76,28 +83,38 @@ impl PlaybackEngine {
         let default_config = device.default_output_config()?;
         let sample_format = default_config.sample_format();
         let stream_config: StreamConfig = default_config.config();
+        let output_channels = stream_config.channels as usize;
+        let output_sample_rate = stream_config.sample_rate;
 
         dev::log(format!(
-            "audio output: {} Hz | {} channels",
-            stream_config.sample_rate,
-            stream_config.channels
+            "audio output: {output_sample_rate} Hz | {output_channels} channels"
         ));
 
+        let eq_channels: Vec<LiveEq> = (0..output_channels.max(1))
+            .map(|_| LiveEq::new(output_sample_rate))
+            .collect();
+
+        let unity = EqGains::default();
         let shared = Arc::new(SharedPlayback {
             track: Mutex::new(None),
+            eq: Mutex::new(eq_channels),
             playhead_frame: AtomicU64::new(0),
             duration_frames: AtomicU64::new(0),
-            sample_rate: AtomicU64::new(stream_config.sample_rate as u64),
+            sample_rate: AtomicU64::new(output_sample_rate as u64),
             playing: AtomicBool::new(false),
             volume: AtomicU32::new(0.85f32.to_bits()),
-            output_channels: stream_config.channels as usize,
-            output_sample_rate: stream_config.sample_rate,
+            eq_low: AtomicU32::new(unity.low.to_bits()),
+            eq_low_mid: AtomicU32::new(unity.low_mid.to_bits()),
+            eq_hi_mid: AtomicU32::new(unity.hi_mid.to_bits()),
+            eq_hi: AtomicU32::new(unity.hi.to_bits()),
+            output_channels,
+            output_sample_rate,
         });
 
         let status = Arc::new(PlaybackStatus {
             playhead_frame: AtomicU64::new(0),
             duration_frames: AtomicU64::new(0),
-            sample_rate: AtomicU64::new(stream_config.sample_rate as u64),
+            sample_rate: AtomicU64::new(output_sample_rate as u64),
             playing: AtomicBool::new(false),
         });
 
@@ -210,6 +227,11 @@ impl PlaybackEngine {
         Ok(())
     }
 
+    pub fn set_eq(&self, gains: EqGains) -> anyhow::Result<()> {
+        self.cmd_tx.send(PlaybackCommand::SetEq(gains.clamped()))?;
+        Ok(())
+    }
+
     fn apply(&self, cmd: PlaybackCommand) {
         match cmd {
             PlaybackCommand::Load(audio) => {
@@ -235,7 +257,6 @@ impl PlaybackEngine {
                 let track = TrackBuffer {
                     samples: Arc::from(audio.samples.into_boxed_slice()),
                     channels,
-                    sample_rate: audio.sample_rate,
                     duration_frames,
                 };
 
@@ -247,6 +268,7 @@ impl PlaybackEngine {
                     .store(audio.sample_rate as u64, Ordering::Relaxed);
                 self.shared.playhead_frame.store(0, Ordering::Relaxed);
                 self.shared.playing.store(false, Ordering::Relaxed);
+                self.reset_eq();
 
                 *self.shared.track.lock().expect("playback track lock") = Some(track);
 
@@ -268,6 +290,7 @@ impl PlaybackEngine {
                 let duration = self.shared.duration_frames.load(Ordering::Relaxed);
                 let frame = frame.min(duration);
                 self.shared.playhead_frame.store(frame, Ordering::Relaxed);
+                self.reset_eq();
                 dev::log(format!("seek -> frame {frame}"));
             }
             PlaybackCommand::SetVolume(volume) => {
@@ -275,7 +298,38 @@ impl PlaybackEngine {
                     .volume
                     .store(volume.to_bits(), Ordering::Relaxed);
             }
+            PlaybackCommand::SetEq(gains) => {
+                self.shared.eq_low.store(gains.low.to_bits(), Ordering::Relaxed);
+                self.shared
+                    .eq_low_mid
+                    .store(gains.low_mid.to_bits(), Ordering::Relaxed);
+                self.shared
+                    .eq_hi_mid
+                    .store(gains.hi_mid.to_bits(), Ordering::Relaxed);
+                self.shared.eq_hi.store(gains.hi.to_bits(), Ordering::Relaxed);
+                dev::log(format!(
+                    "eq L={:.2} LM={:.2} HM={:.2} H={:.2}",
+                    gains.low, gains.low_mid, gains.hi_mid, gains.hi
+                ));
+            }
         }
+    }
+
+    fn reset_eq(&self) {
+        if let Ok(mut eqs) = self.shared.eq.lock() {
+            for eq in eqs.iter_mut() {
+                eq.reset(self.shared.output_sample_rate);
+            }
+        }
+    }
+}
+
+fn read_gains(shared: &SharedPlayback) -> EqGains {
+    EqGains {
+        low: f32::from_bits(shared.eq_low.load(Ordering::Relaxed)),
+        low_mid: f32::from_bits(shared.eq_low_mid.load(Ordering::Relaxed)),
+        hi_mid: f32::from_bits(shared.eq_hi_mid.load(Ordering::Relaxed)),
+        hi: f32::from_bits(shared.eq_hi.load(Ordering::Relaxed)),
     }
 }
 
@@ -307,8 +361,13 @@ fn render_output_f32(data: &mut [f32], shared: &SharedPlayback, status: &Playbac
         return;
     };
 
+    let Ok(mut eqs) = shared.eq.try_lock() else {
+        return;
+    };
+
     let src_channels = src_channels.max(1);
     let volume = f32::from_bits(shared.volume.load(Ordering::Relaxed));
+    let gains = read_gains(shared);
     let mut frame = shared.playhead_frame.load(Ordering::Relaxed);
     let mut rendered_frames = 0u64;
 
@@ -322,8 +381,10 @@ fn render_output_f32(data: &mut [f32], shared: &SharedPlayback, status: &Playbac
         for out_ch in 0..out_channels {
             let src_ch = out_ch % src_channels;
             let idx = base + src_ch;
-            let sample = samples.get(idx).copied().unwrap_or(0.0) * volume;
-            data[out_frame * out_channels + out_ch] = sample;
+            let dry = samples.get(idx).copied().unwrap_or(0.0);
+            let eq_ch = out_ch.min(eqs.len().saturating_sub(1));
+            let wet = eqs[eq_ch].process(dry, gains);
+            data[out_frame * out_channels + out_ch] = wet * volume;
         }
 
         frame += 1;

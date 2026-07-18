@@ -9,10 +9,10 @@ use eframe::egui;
 use crate::bpm::detect_bpm;
 use crate::decode::DecodedAudio;
 use crate::dev;
+use crate::eq::{band_waveform_peaks, BandWaveform, EqGains, BAND_COLORS, BAND_LABELS};
 use crate::key::detect_key;
 use crate::playback::PlaybackEngine;
 use crate::playlist::{AnalysisState, Playlist};
-use crate::waveform::waveform_peaks;
 use crate::worker::{AnalysisWorker, WorkerJob, WorkerUpdate};
 
 struct AnalysisResult {
@@ -29,10 +29,11 @@ pub struct DjApp {
     analysis_tx: Sender<AnalysisResult>,
     analysis_rx: Receiver<AnalysisResult>,
     audio_cache: HashMap<usize, Arc<DecodedAudio>>,
-    waveform_cache: HashMap<usize, Vec<(f32, f32)>>,
+    waveform_cache: HashMap<usize, BandWaveform>,
     selected: Option<usize>,
     playing_track: Option<usize>,
     volume: f32,
+    eq: EqGains,
     seek_slider: f64,
     status_message: String,
 }
@@ -60,6 +61,7 @@ impl DjApp {
             selected: None,
             playing_track: None,
             volume: 0.85,
+            eq: EqGains::default(),
             seek_slider: 0.0,
             status_message: "Load a folder or drop MP3s to begin.".to_string(),
         }
@@ -80,9 +82,10 @@ impl DjApp {
                     ));
 
                     let peak_start = std::time::Instant::now();
-                    let peaks = waveform_peaks(&audio, 800);
+                    let mono = audio.downmix_to_mono();
+                    let peaks = band_waveform_peaks(&mono, audio.sample_rate, 800);
                     self.waveform_cache.insert(track_index, peaks);
-                    dev::log_timing("waveform peaks", peak_start);
+                    dev::log_timing("band waveform peaks", peak_start);
 
                     if let Some(track) = self.playlist.tracks.get_mut(track_index) {
                         track.analysis = AnalysisState::Analyzing;
@@ -111,14 +114,15 @@ impl DjApp {
         }
 
         while let Ok(result) = self.analysis_rx.try_recv() {
-            dev::log(format!(
-                "track #{} analysis done — {:.1} BPM, {}",
-                result.track_index, result.bpm, result.key
-            ));
             if let Some(track) = self.playlist.tracks.get_mut(result.track_index) {
-                track.bpm = Some(result.bpm);
-                track.key = Some(result.key);
-                track.analysis = AnalysisState::Done;
+                track.set_analysis_result(result.bpm, result.key.clone());
+                dev::log(format!(
+                    "track #{} analysis done — {:.1} BPM, {} ({})",
+                    result.track_index,
+                    result.bpm,
+                    result.key,
+                    track.camelot.as_deref().unwrap_or("?")
+                ));
             }
         }
     }
@@ -145,12 +149,13 @@ impl DjApp {
         self.playing_track = None;
         self.audio_cache.clear();
         self.waveform_cache.clear();
+        let count = self.playlist.tracks.len();
         self.status_message = format!(
-            "Loaded {} tracks from {} — click a track to load/play",
-            self.playlist.tracks.len(),
+            "Loaded {count} tracks from {} — analyzing all…",
             folder.display()
         );
         dev::log(format!("folder loaded: {}", folder.display()));
+        self.analyze_all();
     }
 
     fn load_paths(&mut self, paths: Vec<PathBuf>) {
@@ -159,10 +164,9 @@ impl DjApp {
         self.playing_track = None;
         self.audio_cache.clear();
         self.waveform_cache.clear();
-        self.status_message = format!(
-            "Loaded {} tracks — click a track to load/play",
-            self.playlist.tracks.len()
-        );
+        let count = self.playlist.tracks.len();
+        self.status_message = format!("Loaded {count} tracks — analyzing all…");
+        self.analyze_all();
     }
 
     fn analyze_all(&mut self) {
@@ -291,46 +295,109 @@ impl DjApp {
         }
     }
 
+    fn draw_eq_knobs(&mut self, ui: &mut egui::Ui) {
+        ui.horizontal(|ui| {
+            ui.label("EQ");
+            let mut changed = false;
+            let gains = [
+                (&mut self.eq.low, BAND_LABELS[0], BAND_COLORS[0]),
+                (&mut self.eq.low_mid, BAND_LABELS[1], BAND_COLORS[1]),
+                (&mut self.eq.hi_mid, BAND_LABELS[2], BAND_COLORS[2]),
+                (&mut self.eq.hi, BAND_LABELS[3], BAND_COLORS[3]),
+            ];
+
+            for (gain, label, color) in gains {
+                let (r, g, b) = color;
+                ui.vertical(|ui| {
+                    ui.label(
+                        egui::RichText::new(label)
+                            .color(egui::Color32::from_rgb(r, g, b))
+                            .small(),
+                    );
+                    if ui
+                        .add(
+                            egui::Slider::new(gain, 0.0..=2.0)
+                                .vertical()
+                                .show_value(false),
+                        )
+                        .changed()
+                    {
+                        changed = true;
+                    }
+                    ui.label(format!("{:.0}%", *gain * 100.0));
+                });
+                ui.add_space(8.0);
+            }
+
+            if ui.button("Reset EQ").clicked() {
+                self.eq = EqGains::default();
+                changed = true;
+            }
+
+            if changed {
+                let _ = self.playback.set_eq(self.eq);
+            }
+        });
+    }
+
     fn draw_waveform(&mut self, ui: &mut egui::Ui) {
         let index = match self.playing_track.or(self.selected) {
             Some(i) => i,
             None => return,
         };
 
-        let peaks = match self.waveform_cache.get(&index) {
-            Some(p) => p,
-            None => {
-                ui.label("Waveform will appear once the track is decoded…");
-                return;
-            }
+        let Some(bands) = self.waveform_cache.get(&index).cloned() else {
+            ui.label("Waveform will appear once the track is decoded…");
+            return;
         };
 
         let label = self.playlist.tracks[index].display_label();
         ui.label(egui::RichText::new(label).strong());
 
-        let desired = egui::vec2(ui.available_width(), 80.0);
+        self.draw_eq_knobs(ui);
+
+        let desired = egui::vec2(ui.available_width(), 110.0);
         let (rect, response) = ui.allocate_exact_size(desired, egui::Sense::CLICK);
         let painter = ui.painter_at(rect);
 
         painter.rect_filled(rect, 4.0, egui::Color32::from_gray(28));
 
-        if peaks.is_empty() {
-            return;
-        }
+        let layers = [
+            (&bands.low, self.eq.low, BAND_COLORS[0]),
+            (&bands.low_mid, self.eq.low_mid, BAND_COLORS[1]),
+            (&bands.hi_mid, self.eq.hi_mid, BAND_COLORS[2]),
+            (&bands.hi, self.eq.hi, BAND_COLORS[3]),
+        ];
 
         let mid_y = rect.center().y;
         let half_h = rect.height() * 0.45;
         let width = rect.width();
-        let n = peaks.len().max(1);
+        let n = bands
+            .low
+            .len()
+            .max(bands.low_mid.len())
+            .max(bands.hi_mid.len())
+            .max(bands.hi.len())
+            .max(1);
 
-        for (i, &(min, max)) in peaks.iter().enumerate() {
-            let x = rect.left() + (i as f32 / n as f32) * width;
-            let y_top = mid_y - max.clamp(0.0, 1.0) * half_h;
-            let y_bot = mid_y - min.clamp(-1.0, 0.0) * half_h;
-            painter.line_segment(
-                [egui::pos2(x, y_top), egui::pos2(x, y_bot)],
-                egui::Stroke::new(1.0, egui::Color32::from_rgb(100, 180, 255)),
-            );
+        // Draw bands bottom→top so highs sit visually on top of lows.
+        for (peaks, gain, (r, g, b)) in layers {
+            if gain <= 0.001 || peaks.is_empty() {
+                continue;
+            }
+
+            let alpha = ((gain / 2.0) * 220.0).clamp(20.0, 220.0) as u8;
+            let color = egui::Color32::from_rgba_unmultiplied(r, g, b, alpha);
+
+            for (i, &(min, max)) in peaks.iter().enumerate() {
+                let x = rect.left() + (i as f32 / n as f32) * width;
+                let y_top = mid_y - (max * gain).clamp(0.0, 1.5).min(1.0) * half_h;
+                let y_bot = mid_y - (min * gain).clamp(-1.5, 0.0).max(-1.0) * half_h;
+                painter.line_segment(
+                    [egui::pos2(x, y_top), egui::pos2(x, y_bot)],
+                    egui::Stroke::new(1.0, color),
+                );
+            }
         }
 
         let duration = self.playback.status().duration_secs();
@@ -444,14 +511,16 @@ impl eframe::App for DjApp {
 
             egui::ScrollArea::vertical().show(ui, |ui| {
                 egui::Grid::new("playlist_grid")
-                    .num_columns(4)
+                    .num_columns(6)
                     .spacing([12.0, 6.0])
                     .striped(true)
                     .show(ui, |ui| {
                         ui.label(egui::RichText::new("Track").strong());
                         ui.label(egui::RichText::new("Duration").strong());
-                        ui.label(egui::RichText::new("Analysis").strong());
-                        ui.label(egui::RichText::new("File").strong());
+                        ui.label(egui::RichText::new("BPM").strong());
+                        ui.label(egui::RichText::new("Key").strong());
+                        ui.label(egui::RichText::new("Camelot").strong());
+                        ui.label(egui::RichText::new("Status").strong());
                         ui.end_row();
 
                         for index in 0..self.playlist.tracks.len() {
@@ -472,27 +541,28 @@ impl eframe::App for DjApp {
 
                             ui.label(track.duration_label());
 
-                            let analysis_text = track.analysis_label();
-                            let analysis_widget = match &track.analysis {
-                                AnalysisState::Failed(_) => {
-                                    egui::RichText::new(analysis_text).color(egui::Color32::RED)
-                                }
-                                AnalysisState::Done => egui::RichText::new(analysis_text)
-                                    .color(egui::Color32::LIGHT_GREEN),
-                                AnalysisState::Loading | AnalysisState::Analyzing => {
-                                    egui::RichText::new(analysis_text).color(egui::Color32::YELLOW)
-                                }
-                                AnalysisState::Pending => egui::RichText::new(analysis_text),
-                            };
-                            ui.label(analysis_widget);
+                            let bpm_text = track.bpm_label();
+                            let key_text = track.key_label();
+                            let camelot_text = track.camelot_label();
+                            let status_text = track.status_label();
 
+                            let value_color = match &track.analysis {
+                                AnalysisState::Failed(_) => egui::Color32::RED,
+                                AnalysisState::Done => egui::Color32::LIGHT_GREEN,
+                                AnalysisState::Loading | AnalysisState::Analyzing => {
+                                    egui::Color32::YELLOW
+                                }
+                                AnalysisState::Pending => egui::Color32::GRAY,
+                            };
+
+                            ui.label(egui::RichText::new(bpm_text).color(value_color));
+                            ui.label(egui::RichText::new(key_text).color(value_color));
                             ui.label(
-                                track
-                                    .path
-                                    .file_name()
-                                    .and_then(|s| s.to_str())
-                                    .unwrap_or(""),
+                                egui::RichText::new(camelot_text)
+                                    .color(value_color)
+                                    .strong(),
                             );
+                            ui.label(egui::RichText::new(status_text).color(value_color));
                             ui.end_row();
                         }
                     });

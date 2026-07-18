@@ -8,3 +8,4 @@ pub mod playback;
 pub mod worker;
 pub mod app;
 pub mod dev;
+pub mod eq;

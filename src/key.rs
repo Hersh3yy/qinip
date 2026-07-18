@@ -47,6 +47,52 @@ pub fn detect_key(audio: &DecodedAudio) -> KeyResult {
     }
 }
 
+/// Convert a key name like `"A Minor"` / `"C Major"` to Camelot notation (`"8A"` / `"8B"`).
+pub fn to_camelot(key_name: &str) -> Option<String> {
+    let key_name = key_name.trim();
+    let (note, mode) = if let Some(note) = key_name.strip_suffix(" Major") {
+        (note, 'B')
+    } else if let Some(note) = key_name.strip_suffix(" Minor") {
+        (note, 'A')
+    } else {
+        return None;
+    };
+
+    let number = match (note, mode) {
+        // Open Key / Camelot major (B) and relative minor (A)
+        ("B", 'B') | ("G#", 'A') | ("Ab", 'A') => 1,
+        ("F#", 'B') | ("Gb", 'B') | ("D#", 'A') | ("Eb", 'A') => 2,
+        ("C#", 'B') | ("Db", 'B') | ("A#", 'A') | ("Bb", 'A') => 3,
+        ("G#", 'B') | ("Ab", 'B') | ("F", 'A') => 4,
+        ("D#", 'B') | ("Eb", 'B') | ("C", 'A') => 5,
+        ("A#", 'B') | ("Bb", 'B') | ("G", 'A') => 6,
+        ("F", 'B') | ("D", 'A') => 7,
+        ("C", 'B') | ("A", 'A') => 8,
+        ("G", 'B') | ("E", 'A') => 9,
+        ("D", 'B') | ("B", 'A') => 10,
+        ("A", 'B') | ("F#", 'A') | ("Gb", 'A') => 11,
+        ("E", 'B') | ("C#", 'A') | ("Db", 'A') => 12,
+        _ => return None,
+    };
+
+    Some(format!("{number}{mode}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::to_camelot;
+
+    #[test]
+    fn camelot_common_keys() {
+        assert_eq!(to_camelot("C Major").as_deref(), Some("8B"));
+        assert_eq!(to_camelot("A Minor").as_deref(), Some("8A"));
+        assert_eq!(to_camelot("G Major").as_deref(), Some("9B"));
+        assert_eq!(to_camelot("E Minor").as_deref(), Some("9A"));
+        assert_eq!(to_camelot("F Major").as_deref(), Some("7B"));
+        assert_eq!(to_camelot("D Minor").as_deref(), Some("7A"));
+    }
+}
+
 fn compute_chroma_vector(mono: &[f32], sample_rate: u32) -> [f32; 12] {
     let window_size = 4096;
     let hop_size = 2048;
