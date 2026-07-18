@@ -1,13 +1,21 @@
 use std::fs::File;
+use std::path::Path;
 
 use symphonia::core::audio::SampleBuffer;
 use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
 use symphonia::core::errors::Error;
 use symphonia::core::formats::FormatOptions;
 use symphonia::core::io::MediaSourceStream;
-use symphonia::core::meta::MetadataOptions;
+use symphonia::core::meta::{MetadataOptions, StandardTagKey};
 use symphonia::core::probe::Hint;
 
+pub struct TrackMetadata {
+    pub title: String,
+    pub artist: String,
+    pub duration_secs: Option<f64>,
+}
+
+#[derive(Clone, Debug)]
 pub struct DecodedAudio {
     pub samples: Vec<f32>,
     pub sample_rate: u32,
@@ -131,5 +139,62 @@ pub fn decode_to_samples(path: &str) -> DecodedAudio {
         samples,
         sample_rate,
         channels,
+    }
+}
+
+/// Read title/artist/duration from container tags without decoding audio.
+pub fn probe_metadata(path: &Path) -> TrackMetadata {
+    let file = File::open(path).unwrap_or_else(|err| panic!("failed to open {}: {err}", path.display()));
+    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+
+    let mut hint = Hint::new();
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        hint.with_extension(ext);
+    }
+
+    let probed = symphonia::default::get_probe()
+        .format(
+            &hint,
+            mss,
+            &FormatOptions::default(),
+            &MetadataOptions::default(),
+        )
+        .unwrap_or_else(|err| panic!("failed to probe {}: {err}", path.display()));
+
+    let mut format = probed.format;
+    let track = format
+        .tracks()
+        .iter()
+        .find(|t| t.codec_params.codec != CODEC_TYPE_NULL);
+
+    let duration_secs = track.and_then(|t| {
+        t.codec_params
+            .n_frames
+            .and_then(|frames| t.codec_params.sample_rate.map(|rate| frames as f64 / rate as f64))
+    });
+
+    let mut title = None;
+    let mut artist = None;
+
+    if let Some(rev) = format.metadata().current() {
+        for tag in rev.tags() {
+            match tag.std_key {
+                Some(StandardTagKey::TrackTitle) => title = Some(tag.value.to_string()),
+                Some(StandardTagKey::Artist) => artist = Some(tag.value.to_string()),
+                _ => {}
+            }
+        }
+    }
+
+    let fallback = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("Unknown")
+        .to_string();
+
+    TrackMetadata {
+        title: title.unwrap_or_else(|| fallback.clone()),
+        artist: artist.unwrap_or_else(|| "Unknown Artist".to_string()),
+        duration_secs,
     }
 }

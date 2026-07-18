@@ -2,6 +2,11 @@
 name = "dj_player"
 version = "0.1.0"
 edition = "2024"
+default-run = "dj_player"
+
+[[bin]]
+name = "analyze"
+path = "src/bin/analyze.rs"
 
 [dependencies]
 anyhow = "1.0.103"

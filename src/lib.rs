@@ -3,3 +3,7 @@ pub mod waveform;
 pub mod bands;
 pub mod bpm;
 pub mod key;
+pub mod playlist;
+pub mod playback;
+pub mod worker;
+pub mod app;

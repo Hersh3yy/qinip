@@ -1,0 +1,368 @@
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::mpsc::Receiver;
+
+use eframe::egui;
+
+use crate::decode::DecodedAudio;
+use crate::playback::PlaybackEngine;
+use crate::playlist::{AnalysisState, Playlist};
+use crate::worker::{AnalysisWorker, WorkerJob, WorkerUpdate};
+
+pub struct DjApp {
+    playlist: Playlist,
+    playback: PlaybackEngine,
+    worker: AnalysisWorker,
+    updates_rx: Receiver<WorkerUpdate>,
+    audio_cache: HashMap<usize, DecodedAudio>,
+    selected: Option<usize>,
+    playing_track: Option<usize>,
+    volume: f32,
+    seek_slider: f64,
+    status_message: String,
+}
+
+impl DjApp {
+    pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+        let playback = PlaybackEngine::new().expect("failed to start audio output");
+        let (worker, updates_rx) = AnalysisWorker::spawn();
+
+        Self {
+            playlist: Playlist::new(),
+            playback,
+            worker,
+            updates_rx,
+            audio_cache: HashMap::new(),
+            selected: None,
+            playing_track: None,
+            volume: 0.85,
+            seek_slider: 0.0,
+            status_message: "Load a folder or drop MP3s to begin.".to_string(),
+        }
+    }
+
+    fn poll_worker(&mut self) {
+        while let Ok(update) = self.updates_rx.try_recv() {
+            match update {
+                WorkerUpdate::TrackReady {
+                    track_index,
+                    audio,
+                    autoplay,
+                } => {
+                    if let Some(track) = self.playlist.tracks.get_mut(track_index) {
+                        track.analysis = AnalysisState::Analyzing;
+                        if track.duration_secs.is_none() {
+                            track.duration_secs = Some(audio.duration_secs());
+                        }
+                    }
+
+                    self.audio_cache.insert(track_index, audio);
+                    self.status_message = format!("Loaded track #{track_index}");
+
+                    if autoplay {
+                        self.play_track(track_index, true);
+                    }
+                }
+                WorkerUpdate::AnalysisComplete {
+                    track_index,
+                    bpm,
+                    key,
+                } => {
+                    if let Some(track) = self.playlist.tracks.get_mut(track_index) {
+                        track.bpm = Some(bpm);
+                        track.key = Some(key);
+                        track.analysis = AnalysisState::Done;
+                    }
+                }
+                WorkerUpdate::Failed {
+                    track_index,
+                    message,
+                } => {
+                    if let Some(track) = self.playlist.tracks.get_mut(track_index) {
+                        track.analysis = AnalysisState::Failed(message.clone());
+                    }
+                    self.status_message = format!("Track #{track_index} failed: {message}");
+                }
+            }
+        }
+    }
+
+    fn load_folder(&mut self, folder: PathBuf) {
+        self.playlist.load_folder(&folder);
+        self.selected = None;
+        self.playing_track = None;
+        self.audio_cache.clear();
+        self.status_message = format!(
+            "Loaded {} tracks from {}",
+            self.playlist.tracks.len(),
+            folder.display()
+        );
+
+        let jobs = self
+            .playlist
+            .tracks
+            .iter()
+            .enumerate()
+            .map(|(index, track)| WorkerJob::LoadAndAnalyze {
+                track_index: index,
+                path: track.path.clone(),
+                autoplay: false,
+            })
+            .collect::<Vec<_>>();
+
+        for track in &mut self.playlist.tracks {
+            track.analysis = AnalysisState::Loading;
+        }
+
+        self.worker.enqueue_all(jobs);
+    }
+
+    fn load_paths(&mut self, paths: Vec<PathBuf>) {
+        self.playlist.load_paths(paths);
+        self.selected = None;
+        self.playing_track = None;
+        self.audio_cache.clear();
+        self.status_message = format!("Loaded {} tracks", self.playlist.tracks.len());
+
+        let jobs = self
+            .playlist
+            .tracks
+            .iter()
+            .enumerate()
+            .map(|(index, track)| WorkerJob::LoadAndAnalyze {
+                track_index: index,
+                path: track.path.clone(),
+                autoplay: false,
+            })
+            .collect::<Vec<_>>();
+
+        for track in &mut self.playlist.tracks {
+            track.analysis = AnalysisState::Loading;
+        }
+
+        self.worker.enqueue_all(jobs);
+    }
+
+    fn select_track(&mut self, index: usize) {
+        self.selected = Some(index);
+
+        if self.audio_cache.contains_key(&index) {
+            self.play_track(index, true);
+            return;
+        }
+
+        if let Some(track) = self.playlist.tracks.get_mut(index) {
+            track.analysis = AnalysisState::Loading;
+            let path = track.path.clone();
+            let label = track.display_label();
+            self.worker.enqueue(WorkerJob::LoadAndAnalyze {
+                track_index: index,
+                path,
+                autoplay: true,
+            });
+            self.status_message = format!("Loading {label}…");
+        }
+    }
+
+    fn play_track(&mut self, index: usize, restart: bool) {
+        let Some(audio) = self.audio_cache.get(&index).cloned() else {
+            return;
+        };
+
+        let _ = self.playback.load(audio);
+        if restart {
+            let _ = self.playback.seek_secs(0.0);
+        }
+        let _ = self.playback.set_volume(self.volume);
+        let _ = self.playback.play();
+
+        self.playing_track = Some(index);
+        self.selected = Some(index);
+        self.status_message = format!(
+            "Playing {}",
+            self.playlist.tracks[index].display_label()
+        );
+    }
+
+    fn toggle_playback(&mut self) {
+        let status = self.playback.status();
+        if status.is_playing() {
+            let _ = self.playback.pause();
+        } else if let Some(index) = self.playing_track {
+            if status.position_secs() >= status.duration_secs().max(0.001) - 0.05 {
+                self.play_track(index, true);
+            } else {
+                let _ = self.playback.play();
+            }
+        } else if let Some(index) = self.selected {
+            self.select_track(index);
+        }
+    }
+
+    fn handle_drops(&mut self, ctx: &egui::Context) {
+        let mut folders = Vec::new();
+        let mut files = Vec::new();
+
+        ctx.input(|input| {
+            for dropped in &input.raw.dropped_files {
+                if let Some(path) = &dropped.path {
+                    if path.is_dir() {
+                        folders.push(path.clone());
+                    } else {
+                        files.push(path.clone());
+                    }
+                }
+            }
+        });
+
+        if let Some(folder) = folders.into_iter().next() {
+            self.load_folder(folder);
+        } else if !files.is_empty() {
+            self.load_paths(files);
+        }
+    }
+}
+
+impl eframe::App for DjApp {
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.poll_worker();
+        self.handle_drops(ctx);
+
+        let status = self.playback.status();
+        if status.is_playing() {
+            self.seek_slider = status.position_secs();
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        }
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        let status = self.playback.status();
+
+        egui::Panel::top("top_bar").show(ui, |ui| {
+            ui.horizontal(|ui| {
+                if ui.button("Load Folder").clicked()
+                    && let Some(folder) = rfd::FileDialog::new().pick_folder()
+                {
+                    self.load_folder(folder);
+                }
+
+                if ui.button("▶ Play/Pause").clicked() {
+                    self.toggle_playback();
+                }
+
+                ui.label(&self.status_message);
+            });
+        });
+
+        egui::Panel::bottom("transport").show(ui, |ui| {
+            ui.horizontal(|ui| {
+                let duration = status.duration_secs();
+                ui.label(format!(
+                    "{} / {}",
+                    format_clock(status.position_secs()),
+                    format_clock(duration)
+                ));
+
+                let mut seek = self.seek_slider;
+                let response = ui.add(
+                    egui::Slider::new(&mut seek, 0.0..=duration.max(0.001))
+                        .show_value(false)
+                        .trailing_fill(true),
+                );
+                if response.dragged() || response.clicked() {
+                    self.seek_slider = seek;
+                    let _ = self.playback.seek_secs(seek);
+                }
+
+                ui.separator();
+
+                ui.label("Vol");
+                if ui
+                    .add(egui::Slider::new(&mut self.volume, 0.0..=1.0).show_value(false))
+                    .changed()
+                {
+                    let _ = self.playback.set_volume(self.volume);
+                }
+            });
+        });
+
+        egui::CentralPanel::default().show(ui, |ui| {
+            ui.heading("Playlist");
+            ui.separator();
+
+            if self.playlist.tracks.is_empty() {
+                ui.label("Drop a folder of MP3s here, or use Load Folder.");
+                return;
+            }
+
+            let mut pending_select = None;
+
+            egui::ScrollArea::vertical().show(ui, |ui| {
+                egui::Grid::new("playlist_grid")
+                    .num_columns(4)
+                    .spacing([12.0, 6.0])
+                    .striped(true)
+                    .show(ui, |ui| {
+                        ui.label(egui::RichText::new("Track").strong());
+                        ui.label(egui::RichText::new("Duration").strong());
+                        ui.label(egui::RichText::new("Analysis").strong());
+                        ui.label(egui::RichText::new("File").strong());
+                        ui.end_row();
+
+                        for index in 0..self.playlist.tracks.len() {
+                            let track = &self.playlist.tracks[index];
+                            let selected = self.selected == Some(index);
+                            let playing = self.playing_track == Some(index);
+
+                            let label = if playing {
+                                format!("▶ {}", track.display_label())
+                            } else {
+                                track.display_label()
+                            };
+
+                            let response = ui.selectable_label(selected, label);
+                            if response.clicked() {
+                                pending_select = Some(index);
+                            }
+
+                            ui.label(track.duration_label());
+
+                            let analysis_text = track.analysis_label();
+                            let analysis_widget = match &track.analysis {
+                                AnalysisState::Failed(_) => {
+                                    egui::RichText::new(analysis_text).color(egui::Color32::RED)
+                                }
+                                AnalysisState::Done => egui::RichText::new(analysis_text)
+                                    .color(egui::Color32::LIGHT_GREEN),
+                                AnalysisState::Loading | AnalysisState::Analyzing => {
+                                    egui::RichText::new(analysis_text).color(egui::Color32::YELLOW)
+                                }
+                                AnalysisState::Pending => egui::RichText::new(analysis_text),
+                            };
+                            ui.label(analysis_widget);
+
+                            ui.label(
+                                track
+                                    .path
+                                    .file_name()
+                                    .and_then(|s| s.to_str())
+                                    .unwrap_or(""),
+                            );
+                            ui.end_row();
+                        }
+                    });
+            });
+
+            if let Some(index) = pending_select {
+                self.select_track(index);
+            }
+        });
+    }
+}
+
+fn format_clock(secs: f64) -> String {
+    let total = secs.max(0.0).round() as u64;
+    let minutes = total / 60;
+    let seconds = total % 60;
+    format!("{minutes}:{seconds:02}")
+}
