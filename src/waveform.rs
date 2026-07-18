@@ -1,7 +1,6 @@
 use crate::decode::DecodedAudio;
 
-pub fn waveform_peaks(audio: &DecodedAudio, num_peaks: usize) -> Vec<(f32, f32)> {
-    let mono = audio.downmix_to_mono();
+pub fn waveform_peaks_from_mono(mono: &[f32], num_peaks: usize) -> Vec<(f32, f32)> {
     let chunk_size = (mono.len() / num_peaks).max(1);
 
     mono.chunks(chunk_size)
@@ -11,6 +10,11 @@ pub fn waveform_peaks(audio: &DecodedAudio, num_peaks: usize) -> Vec<(f32, f32)>
             (min, max)
         })
         .collect()
+}
+
+pub fn waveform_peaks(audio: &DecodedAudio, num_peaks: usize) -> Vec<(f32, f32)> {
+    let mono = audio.downmix_to_mono();
+    waveform_peaks_from_mono(&mono, num_peaks)
 }
 
 pub fn print_ascii_waveform(peaks: &[(f32, f32)]) {

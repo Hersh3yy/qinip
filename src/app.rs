@@ -1,20 +1,35 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::mpsc::Receiver;
+use std::sync::Arc;
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::thread;
 
 use eframe::egui;
 
+use crate::bpm::detect_bpm;
 use crate::decode::DecodedAudio;
+use crate::dev;
+use crate::key::detect_key;
 use crate::playback::PlaybackEngine;
 use crate::playlist::{AnalysisState, Playlist};
+use crate::waveform::waveform_peaks;
 use crate::worker::{AnalysisWorker, WorkerJob, WorkerUpdate};
+
+struct AnalysisResult {
+    track_index: usize,
+    bpm: f32,
+    key: String,
+}
 
 pub struct DjApp {
     playlist: Playlist,
     playback: PlaybackEngine,
     worker: AnalysisWorker,
     updates_rx: Receiver<WorkerUpdate>,
-    audio_cache: HashMap<usize, DecodedAudio>,
+    analysis_tx: Sender<AnalysisResult>,
+    analysis_rx: Receiver<AnalysisResult>,
+    audio_cache: HashMap<usize, Arc<DecodedAudio>>,
+    waveform_cache: HashMap<usize, Vec<(f32, f32)>>,
     selected: Option<usize>,
     playing_track: Option<usize>,
     volume: f32,
@@ -24,15 +39,24 @@ pub struct DjApp {
 
 impl DjApp {
     pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+        if dev::enabled() {
+            eprintln!("[dev] DJ_PLAYER_DEV enabled — logging to stderr");
+            eprintln!("[dev] tip: use `cargo run --release` for ~18x faster analysis");
+        }
+
         let playback = PlaybackEngine::new().expect("failed to start audio output");
         let (worker, updates_rx) = AnalysisWorker::spawn();
+        let (analysis_tx, analysis_rx) = mpsc::channel();
 
         Self {
             playlist: Playlist::new(),
             playback,
             worker,
             updates_rx,
+            analysis_tx,
+            analysis_rx,
             audio_cache: HashMap::new(),
+            waveform_cache: HashMap::new(),
             selected: None,
             playing_track: None,
             volume: 0.85,
@@ -49,29 +73,28 @@ impl DjApp {
                     audio,
                     autoplay,
                 } => {
+                    dev::log(format!(
+                        "track #{track_index} ready — {:.1}s, {} samples",
+                        audio.duration_secs(),
+                        audio.samples.len()
+                    ));
+
+                    let peak_start = std::time::Instant::now();
+                    let peaks = waveform_peaks(&audio, 800);
+                    self.waveform_cache.insert(track_index, peaks);
+                    dev::log_timing("waveform peaks", peak_start);
+
                     if let Some(track) = self.playlist.tracks.get_mut(track_index) {
                         track.analysis = AnalysisState::Analyzing;
-                        if track.duration_secs.is_none() {
-                            track.duration_secs = Some(audio.duration_secs());
-                        }
+                        track.duration_secs = Some(audio.duration_secs());
                     }
 
-                    self.audio_cache.insert(track_index, audio);
-                    self.status_message = format!("Loaded track #{track_index}");
+                    let audio = Arc::new(audio);
+                    self.audio_cache.insert(track_index, Arc::clone(&audio));
+                    self.spawn_analysis(track_index, audio);
 
                     if autoplay {
                         self.play_track(track_index, true);
-                    }
-                }
-                WorkerUpdate::AnalysisComplete {
-                    track_index,
-                    bpm,
-                    key,
-                } => {
-                    if let Some(track) = self.playlist.tracks.get_mut(track_index) {
-                        track.bpm = Some(bpm);
-                        track.key = Some(key);
-                        track.analysis = AnalysisState::Done;
                     }
                 }
                 WorkerUpdate::Failed {
@@ -82,9 +105,38 @@ impl DjApp {
                         track.analysis = AnalysisState::Failed(message.clone());
                     }
                     self.status_message = format!("Track #{track_index} failed: {message}");
+                    dev::log(format!("track #{track_index} failed: {message}"));
                 }
             }
         }
+
+        while let Ok(result) = self.analysis_rx.try_recv() {
+            dev::log(format!(
+                "track #{} analysis done — {:.1} BPM, {}",
+                result.track_index, result.bpm, result.key
+            ));
+            if let Some(track) = self.playlist.tracks.get_mut(result.track_index) {
+                track.bpm = Some(result.bpm);
+                track.key = Some(result.key);
+                track.analysis = AnalysisState::Done;
+            }
+        }
+    }
+
+    fn spawn_analysis(&self, track_index: usize, audio: Arc<DecodedAudio>) {
+        let tx = self.analysis_tx.clone();
+        thread::spawn(move || {
+            let start = std::time::Instant::now();
+            let bpm_result = detect_bpm(&audio);
+            let key_result = detect_key(&audio);
+            dev::log_timing(&format!("bpm+key track #{track_index}"), start);
+
+            let _ = tx.send(AnalysisResult {
+                track_index,
+                bpm: bpm_result.bpm,
+                key: key_result.key_name,
+            });
+        });
     }
 
     fn load_folder(&mut self, folder: PathBuf) {
@@ -92,29 +144,13 @@ impl DjApp {
         self.selected = None;
         self.playing_track = None;
         self.audio_cache.clear();
+        self.waveform_cache.clear();
         self.status_message = format!(
-            "Loaded {} tracks from {}",
+            "Loaded {} tracks from {} — click a track to load/play",
             self.playlist.tracks.len(),
             folder.display()
         );
-
-        let jobs = self
-            .playlist
-            .tracks
-            .iter()
-            .enumerate()
-            .map(|(index, track)| WorkerJob::LoadAndAnalyze {
-                track_index: index,
-                path: track.path.clone(),
-                autoplay: false,
-            })
-            .collect::<Vec<_>>();
-
-        for track in &mut self.playlist.tracks {
-            track.analysis = AnalysisState::Loading;
-        }
-
-        self.worker.enqueue_all(jobs);
+        dev::log(format!("folder loaded: {}", folder.display()));
     }
 
     fn load_paths(&mut self, paths: Vec<PathBuf>) {
@@ -122,25 +158,44 @@ impl DjApp {
         self.selected = None;
         self.playing_track = None;
         self.audio_cache.clear();
-        self.status_message = format!("Loaded {} tracks", self.playlist.tracks.len());
+        self.waveform_cache.clear();
+        self.status_message = format!(
+            "Loaded {} tracks — click a track to load/play",
+            self.playlist.tracks.len()
+        );
+    }
 
-        let jobs = self
+    fn analyze_all(&mut self) {
+        let jobs: Vec<_> = self
             .playlist
             .tracks
             .iter()
             .enumerate()
-            .map(|(index, track)| WorkerJob::LoadAndAnalyze {
-                track_index: index,
-                path: track.path.clone(),
-                autoplay: false,
+            .filter(|(index, _)| !self.audio_cache.contains_key(index))
+            .map(|(index, track)| {
+                (
+                    index,
+                    WorkerJob::LoadTrack {
+                        track_index: index,
+                        path: track.path.clone(),
+                        autoplay: false,
+                    },
+                )
             })
-            .collect::<Vec<_>>();
+            .collect();
 
-        for track in &mut self.playlist.tracks {
-            track.analysis = AnalysisState::Loading;
+        for (index, _) in &jobs {
+            if let Some(entry) = self.playlist.tracks.get_mut(*index) {
+                entry.analysis = AnalysisState::Loading;
+            }
         }
 
-        self.worker.enqueue_all(jobs);
+        for (_, job) in jobs {
+            self.worker.enqueue(job);
+        }
+
+        self.status_message = "Analyzing all tracks in background…".to_string();
+        dev::log("queued analyze-all");
     }
 
     fn select_track(&mut self, index: usize) {
@@ -155,17 +210,19 @@ impl DjApp {
             track.analysis = AnalysisState::Loading;
             let path = track.path.clone();
             let label = track.display_label();
-            self.worker.enqueue(WorkerJob::LoadAndAnalyze {
+            self.worker.enqueue(WorkerJob::LoadTrack {
                 track_index: index,
                 path,
                 autoplay: true,
             });
             self.status_message = format!("Loading {label}…");
+            dev::log(format!("selected track #{index}: {label}"));
         }
     }
 
     fn play_track(&mut self, index: usize, restart: bool) {
-        let Some(audio) = self.audio_cache.get(&index).cloned() else {
+        let Some(audio) = self.audio_cache.get(&index).map(|a| (**a).clone()) else {
+            dev::log(format!("play_track #{index} — not in cache yet"));
             return;
         };
 
@@ -182,6 +239,7 @@ impl DjApp {
             "Playing {}",
             self.playlist.tracks[index].display_label()
         );
+        dev::log(format!("playing track #{index}"));
     }
 
     fn toggle_playback(&mut self) {
@@ -197,6 +255,17 @@ impl DjApp {
         } else if let Some(index) = self.selected {
             self.select_track(index);
         }
+    }
+
+    fn seek_from_waveform_click(&mut self, fraction: f64) {
+        let duration = self.playback.status().duration_secs();
+        if duration <= 0.0 {
+            return;
+        }
+        let secs = (fraction * duration).clamp(0.0, duration);
+        self.seek_slider = secs;
+        let _ = self.playback.seek_secs(secs);
+        dev::log(format!("waveform seek -> {secs:.1}s"));
     }
 
     fn handle_drops(&mut self, ctx: &egui::Context) {
@@ -221,10 +290,71 @@ impl DjApp {
             self.load_paths(files);
         }
     }
+
+    fn draw_waveform(&mut self, ui: &mut egui::Ui) {
+        let index = match self.playing_track.or(self.selected) {
+            Some(i) => i,
+            None => return,
+        };
+
+        let peaks = match self.waveform_cache.get(&index) {
+            Some(p) => p,
+            None => {
+                ui.label("Waveform will appear once the track is decoded…");
+                return;
+            }
+        };
+
+        let label = self.playlist.tracks[index].display_label();
+        ui.label(egui::RichText::new(label).strong());
+
+        let desired = egui::vec2(ui.available_width(), 80.0);
+        let (rect, response) = ui.allocate_exact_size(desired, egui::Sense::CLICK);
+        let painter = ui.painter_at(rect);
+
+        painter.rect_filled(rect, 4.0, egui::Color32::from_gray(28));
+
+        if peaks.is_empty() {
+            return;
+        }
+
+        let mid_y = rect.center().y;
+        let half_h = rect.height() * 0.45;
+        let width = rect.width();
+        let n = peaks.len().max(1);
+
+        for (i, &(min, max)) in peaks.iter().enumerate() {
+            let x = rect.left() + (i as f32 / n as f32) * width;
+            let y_top = mid_y - max.clamp(0.0, 1.0) * half_h;
+            let y_bot = mid_y - min.clamp(-1.0, 0.0) * half_h;
+            painter.line_segment(
+                [egui::pos2(x, y_top), egui::pos2(x, y_bot)],
+                egui::Stroke::new(1.0, egui::Color32::from_rgb(100, 180, 255)),
+            );
+        }
+
+        let duration = self.playback.status().duration_secs();
+        if duration > 0.0 {
+            let fraction = (self.seek_slider / duration).clamp(0.0, 1.0) as f32;
+            let x = rect.left() + fraction * width;
+            painter.line_segment(
+                [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
+                egui::Stroke::new(2.0, egui::Color32::WHITE),
+            );
+        }
+
+        if response.clicked() {
+            if let Some(pos) = response.interact_pointer_pos() {
+                let fraction = ((pos.x - rect.left()) / width).clamp(0.0, 1.0) as f64;
+                self.seek_from_waveform_click(fraction);
+            }
+        }
+    }
 }
 
 impl eframe::App for DjApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.playback.poll();
         self.poll_worker();
         self.handle_drops(ctx);
 
@@ -246,11 +376,23 @@ impl eframe::App for DjApp {
                     self.load_folder(folder);
                 }
 
+                if ui.button("Analyze All").clicked() {
+                    self.analyze_all();
+                }
+
                 if ui.button("▶ Play/Pause").clicked() {
                     self.toggle_playback();
                 }
 
                 ui.label(&self.status_message);
+
+                if dev::enabled() {
+                    ui.label(
+                        egui::RichText::new("DEV")
+                            .color(egui::Color32::YELLOW)
+                            .strong(),
+                    );
+                }
             });
         });
 
@@ -287,6 +429,9 @@ impl eframe::App for DjApp {
         });
 
         egui::CentralPanel::default().show(ui, |ui| {
+            self.draw_waveform(ui);
+            ui.separator();
+
             ui.heading("Playlist");
             ui.separator();
 

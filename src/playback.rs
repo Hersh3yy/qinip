@@ -1,45 +1,30 @@
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, mpsc};
-use std::thread::{self, JoinHandle};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, mpsc};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{Sample, SampleFormat, StreamConfig};
-use ringbuf::{HeapRb, traits::*};
 
 use crate::decode::DecodedAudio;
-
-const RINGBUF_CAPACITY: usize = 44100 * 2 * 2;
+use crate::dev;
 
 #[derive(Debug)]
-pub enum PlaybackCommand {
+enum PlaybackCommand {
     Load(DecodedAudio),
     Play,
     Pause,
     SeekFrame(u64),
     SetVolume(f32),
-    Shutdown,
 }
 
 #[derive(Debug)]
 pub struct PlaybackStatus {
-    pub playhead_frame: AtomicU64,
-    pub duration_frames: AtomicU64,
-    pub sample_rate: AtomicU64,
-    pub playing: AtomicBool,
-    pub seek_generation: AtomicU64,
+    playhead_frame: AtomicU64,
+    duration_frames: AtomicU64,
+    sample_rate: AtomicU64,
+    playing: AtomicBool,
 }
 
 impl PlaybackStatus {
-    fn new() -> Arc<Self> {
-        Arc::new(Self {
-            playhead_frame: AtomicU64::new(0),
-            duration_frames: AtomicU64::new(0),
-            sample_rate: AtomicU64::new(44_100),
-            playing: AtomicBool::new(false),
-            seek_generation: AtomicU64::new(0),
-        })
-    }
-
     pub fn position_secs(&self) -> f64 {
         let rate = self.sample_rate.load(Ordering::Relaxed).max(1);
         self.playhead_frame.load(Ordering::Relaxed) as f64 / rate as f64
@@ -55,19 +40,29 @@ impl PlaybackStatus {
     }
 }
 
-struct FeederState {
-    samples: Arc<Vec<f32>>,
+struct TrackBuffer {
+    samples: Arc<[f32]>,
     channels: usize,
-    playhead_sample: usize,
-    volume: f32,
-    playing: bool,
+    sample_rate: u32,
+    duration_frames: u64,
+}
+
+struct SharedPlayback {
+    track: Mutex<Option<TrackBuffer>>,
+    playhead_frame: AtomicU64,
+    duration_frames: AtomicU64,
+    sample_rate: AtomicU64,
+    playing: AtomicBool,
+    volume: AtomicU32,
+    output_channels: usize,
+    output_sample_rate: u32,
 }
 
 pub struct PlaybackEngine {
+    shared: Arc<SharedPlayback>,
+    cmd_rx: mpsc::Receiver<PlaybackCommand>,
     cmd_tx: mpsc::Sender<PlaybackCommand>,
     status: Arc<PlaybackStatus>,
-    output_sample_rate: u32,
-    _feeder: JoinHandle<()>,
     _stream: cpal::Stream,
 }
 
@@ -81,30 +76,40 @@ impl PlaybackEngine {
         let default_config = device.default_output_config()?;
         let sample_format = default_config.sample_format();
         let stream_config: StreamConfig = default_config.config();
-        let output_sample_rate = stream_config.sample_rate;
 
-        let rb = HeapRb::<f32>::new(RINGBUF_CAPACITY);
-        let (producer, mut consumer) = rb.split();
+        dev::log(format!(
+            "audio output: {} Hz | {} channels",
+            stream_config.sample_rate,
+            stream_config.channels
+        ));
 
-        let status = PlaybackStatus::new();
-        let status_for_callback = Arc::clone(&status);
+        let shared = Arc::new(SharedPlayback {
+            track: Mutex::new(None),
+            playhead_frame: AtomicU64::new(0),
+            duration_frames: AtomicU64::new(0),
+            sample_rate: AtomicU64::new(stream_config.sample_rate as u64),
+            playing: AtomicBool::new(false),
+            volume: AtomicU32::new(0.85f32.to_bits()),
+            output_channels: stream_config.channels as usize,
+            output_sample_rate: stream_config.sample_rate,
+        });
 
-        let (cmd_tx, cmd_rx) = mpsc::channel::<PlaybackCommand>();
+        let status = Arc::new(PlaybackStatus {
+            playhead_frame: AtomicU64::new(0),
+            duration_frames: AtomicU64::new(0),
+            sample_rate: AtomicU64::new(stream_config.sample_rate as u64),
+            playing: AtomicBool::new(false),
+        });
+
+        let shared_cb = Arc::clone(&shared);
+        let status_cb = Arc::clone(&status);
 
         let err_fn = |err| eprintln!("audio stream error: {err}");
-        let mut last_seek = 0u64;
-        let mut drain_buf = [0.0f32; 1024];
-
         let stream = match sample_format {
             SampleFormat::F32 => device.build_output_stream(
                 stream_config.clone(),
                 move |data: &mut [f32], _| {
-                    drain_if_seeked(&mut consumer, &status_for_callback, &mut last_seek, &mut drain_buf);
-                    let popped = consumer.pop_slice(data);
-                    for sample in &mut data[popped..] {
-                        *sample = 0.0;
-                    }
-                    maybe_stop_at_end(&status_for_callback, popped);
+                    render_output_f32(data, &shared_cb, &status_cb);
                 },
                 err_fn,
                 None,
@@ -112,33 +117,23 @@ impl PlaybackEngine {
             SampleFormat::I16 => device.build_output_stream(
                 stream_config.clone(),
                 move |data: &mut [i16], _| {
-                    drain_if_seeked(&mut consumer, &status_for_callback, &mut last_seek, &mut drain_buf);
                     let mut temp = vec![0.0f32; data.len()];
-                    let popped = consumer.pop_slice(&mut temp);
-                    for (out, sample) in data.iter_mut().zip(temp.iter()) {
-                        *out = Sample::from_sample(*sample);
+                    render_output_f32(&mut temp, &shared_cb, &status_cb);
+                    for (out, sample) in data.iter_mut().zip(temp) {
+                        *out = Sample::from_sample(sample);
                     }
-                    for out in data.iter_mut().skip(popped) {
-                        *out = Sample::EQUILIBRIUM;
-                    }
-                    maybe_stop_at_end(&status_for_callback, popped);
                 },
                 err_fn,
                 None,
             )?,
             SampleFormat::U16 => device.build_output_stream(
-                stream_config.clone(),
+                stream_config,
                 move |data: &mut [u16], _| {
-                    drain_if_seeked(&mut consumer, &status_for_callback, &mut last_seek, &mut drain_buf);
                     let mut temp = vec![0.0f32; data.len()];
-                    let popped = consumer.pop_slice(&mut temp);
-                    for (out, sample) in data.iter_mut().zip(temp.iter()) {
-                        *out = Sample::from_sample(*sample);
+                    render_output_f32(&mut temp, &shared_cb, &status_cb);
+                    for (out, sample) in data.iter_mut().zip(temp) {
+                        *out = Sample::from_sample(sample);
                     }
-                    for out in data.iter_mut().skip(popped) {
-                        *out = Sample::EQUILIBRIUM;
-                    }
-                    maybe_stop_at_end(&status_for_callback, popped);
                 },
                 err_fn,
                 None,
@@ -147,19 +142,40 @@ impl PlaybackEngine {
         };
 
         stream.play()?;
+        dev::log("cpal output stream started");
 
-        let status_for_feeder = Arc::clone(&status);
-        let feeder = thread::spawn(move || {
-            feeder_loop(cmd_rx, producer, status_for_feeder, output_sample_rate);
-        });
+        let (cmd_tx, cmd_rx) = mpsc::channel();
 
         Ok(Self {
+            shared,
+            cmd_rx,
             cmd_tx,
             status,
-            output_sample_rate,
-            _feeder: feeder,
             _stream: stream,
         })
+    }
+
+    pub fn poll(&self) {
+        while let Ok(cmd) = self.cmd_rx.try_recv() {
+            self.apply(cmd);
+        }
+
+        self.status.playhead_frame.store(
+            self.shared.playhead_frame.load(Ordering::Relaxed),
+            Ordering::Relaxed,
+        );
+        self.status.duration_frames.store(
+            self.shared.duration_frames.load(Ordering::Relaxed),
+            Ordering::Relaxed,
+        );
+        self.status.sample_rate.store(
+            self.shared.sample_rate.load(Ordering::Relaxed),
+            Ordering::Relaxed,
+        );
+        self.status.playing.store(
+            self.shared.playing.load(Ordering::Relaxed),
+            Ordering::Relaxed,
+        );
     }
 
     pub fn status(&self) -> Arc<PlaybackStatus> {
@@ -182,7 +198,7 @@ impl PlaybackEngine {
     }
 
     pub fn seek_secs(&self, secs: f64) -> anyhow::Result<()> {
-        let rate = self.status.sample_rate.load(Ordering::Relaxed).max(1);
+        let rate = self.shared.sample_rate.load(Ordering::Relaxed).max(1);
         let frame = (secs.max(0.0) * rate as f64).round() as u64;
         self.cmd_tx.send(PlaybackCommand::SeekFrame(frame))?;
         Ok(())
@@ -194,126 +210,134 @@ impl PlaybackEngine {
         Ok(())
     }
 
-    pub fn output_sample_rate(&self) -> u32 {
-        self.output_sample_rate
-    }
-}
+    fn apply(&self, cmd: PlaybackCommand) {
+        match cmd {
+            PlaybackCommand::Load(audio) => {
+                let start = std::time::Instant::now();
+                let mut audio = audio;
+                if audio.sample_rate != self.shared.output_sample_rate {
+                    dev::log(format!(
+                        "resampling {} -> {} Hz",
+                        audio.sample_rate, self.shared.output_sample_rate
+                    ));
+                    audio.samples = resample_interleaved(
+                        &audio.samples,
+                        audio.channels,
+                        audio.sample_rate,
+                        self.shared.output_sample_rate,
+                    );
+                    audio.sample_rate = self.shared.output_sample_rate;
+                }
 
-impl Drop for PlaybackEngine {
-    fn drop(&mut self) {
-        let _ = self.cmd_tx.send(PlaybackCommand::Shutdown);
-    }
-}
+                let channels = audio.channels.max(1);
+                let duration_frames = (audio.samples.len() / channels) as u64;
 
-fn drain_if_seeked(
-    consumer: &mut ringbuf::HeapCons<f32>,
-    status: &PlaybackStatus,
-    last_seek: &mut u64,
-    scratch: &mut [f32],
-) {
-    let generation = status.seek_generation.load(Ordering::Acquire);
-    if generation != *last_seek {
-        while consumer.pop_slice(scratch) > 0 {}
-        *last_seek = generation;
-    }
-}
+                let track = TrackBuffer {
+                    samples: Arc::from(audio.samples.into_boxed_slice()),
+                    channels,
+                    sample_rate: audio.sample_rate,
+                    duration_frames,
+                };
 
-fn maybe_stop_at_end(status: &PlaybackStatus, popped: usize) {
-    if popped == 0 && status.playing.load(Ordering::Relaxed) {
-        let frame = status.playhead_frame.load(Ordering::Relaxed);
-        let duration = status.duration_frames.load(Ordering::Relaxed);
-        if duration > 0 && frame >= duration {
-            status.playing.store(false, Ordering::Relaxed);
+                self.shared
+                    .duration_frames
+                    .store(duration_frames, Ordering::Relaxed);
+                self.shared
+                    .sample_rate
+                    .store(audio.sample_rate as u64, Ordering::Relaxed);
+                self.shared.playhead_frame.store(0, Ordering::Relaxed);
+                self.shared.playing.store(false, Ordering::Relaxed);
+
+                *self.shared.track.lock().expect("playback track lock") = Some(track);
+
+                dev::log(format!(
+                    "loaded track: {duration_frames} frames, {channels} ch @ {} Hz",
+                    audio.sample_rate
+                ));
+                dev::log_timing("playback load", start);
+            }
+            PlaybackCommand::Play => {
+                self.shared.playing.store(true, Ordering::Relaxed);
+                dev::log("play");
+            }
+            PlaybackCommand::Pause => {
+                self.shared.playing.store(false, Ordering::Relaxed);
+                dev::log("pause");
+            }
+            PlaybackCommand::SeekFrame(frame) => {
+                let duration = self.shared.duration_frames.load(Ordering::Relaxed);
+                let frame = frame.min(duration);
+                self.shared.playhead_frame.store(frame, Ordering::Relaxed);
+                dev::log(format!("seek -> frame {frame}"));
+            }
+            PlaybackCommand::SetVolume(volume) => {
+                self.shared
+                    .volume
+                    .store(volume.to_bits(), Ordering::Relaxed);
+            }
         }
     }
 }
 
-fn feeder_loop(
-    cmd_rx: mpsc::Receiver<PlaybackCommand>,
-    mut producer: ringbuf::HeapProd<f32>,
-    status: Arc<PlaybackStatus>,
-    output_sample_rate: u32,
-) {
-    let mut state = FeederState {
-        samples: Arc::new(Vec::new()),
-        channels: 2,
-        playhead_sample: 0,
-        volume: 0.85,
-        playing: false,
+fn render_output_f32(data: &mut [f32], shared: &SharedPlayback, status: &PlaybackStatus) {
+    let out_channels = shared.output_channels.max(1);
+    let out_frames = data.len() / out_channels;
+
+    for sample in data.iter_mut() {
+        *sample = 0.0;
+    }
+
+    let playing = shared.playing.load(Ordering::Relaxed);
+    if !playing || out_frames == 0 {
+        return;
+    }
+
+    let track = match shared.track.try_lock() {
+        Ok(guard) => guard.as_ref().map(|t| {
+            (
+                Arc::clone(&t.samples),
+                t.channels,
+                t.duration_frames,
+            )
+        }),
+        Err(_) => return,
     };
 
-    loop {
-        while let Ok(cmd) = cmd_rx.try_recv() {
-            match cmd {
-                PlaybackCommand::Load(mut audio) => {
-                    if audio.sample_rate != output_sample_rate {
-                        audio.samples = resample_interleaved(
-                            &audio.samples,
-                            audio.channels,
-                            audio.sample_rate,
-                            output_sample_rate,
-                        );
-                        audio.sample_rate = output_sample_rate;
-                    }
+    let Some((samples, src_channels, duration_frames)) = track else {
+        return;
+    };
 
-                    let frames = audio.samples.len() / audio.channels.max(1);
-                    status.duration_frames.store(frames as u64, Ordering::Relaxed);
-                    status
-                        .sample_rate
-                        .store(audio.sample_rate as u64, Ordering::Relaxed);
-                    status.playhead_frame.store(0, Ordering::Relaxed);
-                    status.playing.store(false, Ordering::Relaxed);
-                    status.seek_generation.fetch_add(1, Ordering::Release);
+    let src_channels = src_channels.max(1);
+    let volume = f32::from_bits(shared.volume.load(Ordering::Relaxed));
+    let mut frame = shared.playhead_frame.load(Ordering::Relaxed);
+    let mut rendered_frames = 0u64;
 
-                    state.channels = audio.channels.max(1);
-                    state.playhead_sample = 0;
-                    state.samples = Arc::new(audio.samples);
-                    state.playing = false;
-                }
-                PlaybackCommand::Play => {
-                    state.playing = true;
-                    status.playing.store(true, Ordering::Relaxed);
-                }
-                PlaybackCommand::Pause => {
-                    state.playing = false;
-                    status.playing.store(false, Ordering::Relaxed);
-                }
-                PlaybackCommand::SeekFrame(frame) => {
-                    let sample = (frame as usize).saturating_mul(state.channels);
-                    state.playhead_sample = sample.min(state.samples.len());
-                    status.playhead_frame.store(frame, Ordering::Relaxed);
-                    status.seek_generation.fetch_add(1, Ordering::Release);
-                }
-                PlaybackCommand::SetVolume(volume) => {
-                    state.volume = volume;
-                }
-                PlaybackCommand::Shutdown => return,
-            }
+    for out_frame in 0..out_frames {
+        if frame >= duration_frames {
+            shared.playing.store(false, Ordering::Relaxed);
+            break;
         }
 
-        if state.playing && state.playhead_sample < state.samples.len() {
-            let chunk_size = 2048.min(state.samples.len() - state.playhead_sample);
-            let mut chunk = vec![0.0f32; chunk_size];
-            for (out, &sample) in chunk
-                .iter_mut()
-                .zip(&state.samples[state.playhead_sample..state.playhead_sample + chunk_size])
-            {
-                *out = sample * state.volume;
-            }
-
-            let pushed = producer.push_slice(&chunk);
-            state.playhead_sample += pushed;
-            let frame = (state.playhead_sample / state.channels) as u64;
-            status.playhead_frame.store(frame, Ordering::Relaxed);
-
-            let duration = status.duration_frames.load(Ordering::Relaxed);
-            if duration > 0 && frame >= duration {
-                state.playing = false;
-                status.playing.store(false, Ordering::Relaxed);
-            }
-        } else {
-            thread::sleep(std::time::Duration::from_millis(4));
+        let base = frame as usize * src_channels;
+        for out_ch in 0..out_channels {
+            let src_ch = out_ch % src_channels;
+            let idx = base + src_ch;
+            let sample = samples.get(idx).copied().unwrap_or(0.0) * volume;
+            data[out_frame * out_channels + out_ch] = sample;
         }
+
+        frame += 1;
+        rendered_frames += 1;
+    }
+
+    if rendered_frames > 0 {
+        shared.playhead_frame.store(frame, Ordering::Relaxed);
+        status.playhead_frame.store(frame, Ordering::Relaxed);
+    }
+
+    if frame >= duration_frames && duration_frames > 0 {
+        shared.playing.store(false, Ordering::Relaxed);
+        status.playing.store(false, Ordering::Relaxed);
     }
 }
 

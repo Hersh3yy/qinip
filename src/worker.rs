@@ -3,13 +3,12 @@ use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread::{self, JoinHandle};
 
-use crate::bpm::detect_bpm;
 use crate::decode::{decode_to_samples, DecodedAudio};
-use crate::key::detect_key;
+use crate::dev;
 
 #[derive(Debug)]
 pub enum WorkerJob {
-    LoadAndAnalyze {
+    LoadTrack {
         track_index: usize,
         path: PathBuf,
         autoplay: bool,
@@ -22,11 +21,6 @@ pub enum WorkerUpdate {
         track_index: usize,
         audio: DecodedAudio,
         autoplay: bool,
-    },
-    AnalysisComplete {
-        track_index: usize,
-        bpm: f32,
-        key: String,
     },
     Failed {
         track_index: usize,
@@ -58,12 +52,6 @@ impl AnalysisWorker {
     pub fn enqueue(&self, job: WorkerJob) {
         let _ = self.job_tx.send(job);
     }
-
-    pub fn enqueue_all(&self, jobs: impl IntoIterator<Item = WorkerJob>) {
-        for job in jobs {
-            self.enqueue(job);
-        }
-    }
 }
 
 fn worker_loop(job_rx: Receiver<WorkerJob>, update_tx: Sender<WorkerUpdate>) {
@@ -91,13 +79,16 @@ fn worker_loop(job_rx: Receiver<WorkerJob>, update_tx: Sender<WorkerUpdate>) {
             }
         };
 
-        let WorkerJob::LoadAndAnalyze {
+        let WorkerJob::LoadTrack {
             track_index,
             path,
             autoplay,
         } = job;
 
         let path_display = path.display().to_string();
+        dev::log(format!("decoding {path_display}"));
+
+        let start = std::time::Instant::now();
         let audio = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             decode_to_samples(&path_display)
         })) {
@@ -110,30 +101,13 @@ fn worker_loop(job_rx: Receiver<WorkerJob>, update_tx: Sender<WorkerUpdate>) {
                 continue;
             }
         };
+        dev::log_timing(&format!("decode {path_display}"), start);
 
         if update_tx
             .send(WorkerUpdate::TrackReady {
                 track_index,
-                audio: DecodedAudio {
-                    samples: audio.samples.clone(),
-                    sample_rate: audio.sample_rate,
-                    channels: audio.channels,
-                },
+                audio,
                 autoplay,
-            })
-            .is_err()
-        {
-            return;
-        }
-
-        let bpm_result = detect_bpm(&audio);
-        let key_result = detect_key(&audio);
-
-        if update_tx
-            .send(WorkerUpdate::AnalysisComplete {
-                track_index,
-                bpm: bpm_result.bpm,
-                key: key_result.key_name,
             })
             .is_err()
         {
@@ -143,11 +117,5 @@ fn worker_loop(job_rx: Receiver<WorkerJob>, update_tx: Sender<WorkerUpdate>) {
 }
 
 fn job_is_autoplay(job: &WorkerJob) -> bool {
-    matches!(
-        job,
-        WorkerJob::LoadAndAnalyze {
-            autoplay: true,
-            ..
-        }
-    )
+    matches!(job, WorkerJob::LoadTrack { autoplay: true, .. })
 }
