@@ -1,0 +1,17 @@
+[package]
+name = "dj_player"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+anyhow = "1.0.103"
+aubio-rs = { version = "0.2.0", features = ["bindgen", "pkg-config"] }
+biquad = "0.6.0"
+cpal = "0.18.1"
+eframe = "0.35.0"
+egui = "0.35.0"
+rfd = "0.17.2"
+ringbuf = "0.5.1"
+rustfft = "6.4.1"
+symphonia = { version = "0.5.4", features = ["mp3"] }
+walkdir = "2.5.0"
