@@ -12,6 +12,8 @@ use symphonia::core::probe::Hint;
 pub struct TrackMetadata {
     pub title: String,
     pub artist: String,
+    /// Track number from tags (e.g. ID3 TRCK), if present.
+    pub track_number: Option<u32>,
     pub duration_secs: Option<f64>,
 }
 
@@ -142,7 +144,7 @@ pub fn decode_to_samples(path: &str) -> DecodedAudio {
     }
 }
 
-/// Read title/artist/duration from container tags without decoding audio.
+/// Read title/artist/track#/duration from container tags without decoding audio.
 pub fn probe_metadata(path: &Path) -> TrackMetadata {
     let file = File::open(path).unwrap_or_else(|err| panic!("failed to open {}: {err}", path.display()));
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
@@ -152,7 +154,7 @@ pub fn probe_metadata(path: &Path) -> TrackMetadata {
         hint.with_extension(ext);
     }
 
-    let probed = symphonia::default::get_probe()
+    let mut probed = symphonia::default::get_probe()
         .format(
             &hint,
             mss,
@@ -160,6 +162,24 @@ pub fn probe_metadata(path: &Path) -> TrackMetadata {
             &MetadataOptions::default(),
         )
         .unwrap_or_else(|err| panic!("failed to probe {}: {err}", path.display()));
+
+    let mut title = None;
+    let mut artist = None;
+    let mut album_artist = None;
+    let mut track_number = None;
+
+    // ID3 often lives on the probe metadata bag before the format demuxer.
+    if let Some(mut metadata) = probed.metadata.get() {
+        if let Some(rev) = metadata.skip_to_latest() {
+            absorb_tags(
+                rev.tags(),
+                &mut title,
+                &mut artist,
+                &mut album_artist,
+                &mut track_number,
+            );
+        }
+    }
 
     let mut format = probed.format;
     let track = format
@@ -173,16 +193,16 @@ pub fn probe_metadata(path: &Path) -> TrackMetadata {
             .and_then(|frames| t.codec_params.sample_rate.map(|rate| frames as f64 / rate as f64))
     });
 
-    let mut title = None;
-    let mut artist = None;
-
-    if let Some(rev) = format.metadata().current() {
-        for tag in rev.tags() {
-            match tag.std_key {
-                Some(StandardTagKey::TrackTitle) => title = Some(tag.value.to_string()),
-                Some(StandardTagKey::Artist) => artist = Some(tag.value.to_string()),
-                _ => {}
-            }
+    {
+        let mut metadata = format.metadata();
+        if let Some(rev) = metadata.skip_to_latest() {
+            absorb_tags(
+                rev.tags(),
+                &mut title,
+                &mut artist,
+                &mut album_artist,
+                &mut track_number,
+            );
         }
     }
 
@@ -193,8 +213,41 @@ pub fn probe_metadata(path: &Path) -> TrackMetadata {
         .to_string();
 
     TrackMetadata {
-        title: title.unwrap_or_else(|| fallback.clone()),
-        artist: artist.unwrap_or_else(|| "Unknown Artist".to_string()),
+        title: title.unwrap_or(fallback),
+        artist: artist.or(album_artist).unwrap_or_else(|| "Unknown Artist".to_string()),
+        track_number,
         duration_secs,
     }
+}
+
+fn absorb_tags(
+    tags: &[symphonia::core::meta::Tag],
+    title: &mut Option<String>,
+    artist: &mut Option<String>,
+    album_artist: &mut Option<String>,
+    track_number: &mut Option<u32>,
+) {
+    for tag in tags {
+        match tag.std_key {
+            Some(StandardTagKey::TrackTitle) if title.is_none() => {
+                *title = Some(tag.value.to_string());
+            }
+            Some(StandardTagKey::Artist) if artist.is_none() => {
+                *artist = Some(tag.value.to_string());
+            }
+            Some(StandardTagKey::AlbumArtist) if album_artist.is_none() => {
+                *album_artist = Some(tag.value.to_string());
+            }
+            Some(StandardTagKey::TrackNumber) if track_number.is_none() => {
+                *track_number = parse_track_number(&tag.value.to_string());
+            }
+            _ => {}
+        }
+    }
+}
+
+fn parse_track_number(raw: &str) -> Option<u32> {
+    // ID3 TRCK is often "3" or "3/12".
+    let head = raw.split(['/', ';']).next()?.trim();
+    head.parse().ok()
 }

@@ -1,6 +1,6 @@
 use biquad::{Biquad, Coefficients, DirectForm1, ToHertz, Type, Q_BUTTERWORTH_F32};
 
-/// Four DJ-style band gains. `1.0` = unity (transparent via dry+delta EQ).
+/// Four DJ-style band gains. `1.0` = unity, `0.0` = kill that band.
 #[derive(Clone, Copy, Debug)]
 pub struct EqGains {
     pub low: f32,
@@ -29,10 +29,27 @@ impl EqGains {
             hi: self.hi.clamp(0.0, 2.0),
         }
     }
+
+    pub fn is_unity(&self) -> bool {
+        (self.low - 1.0).abs()
+            + (self.low_mid - 1.0).abs()
+            + (self.hi_mid - 1.0).abs()
+            + (self.hi - 1.0).abs()
+            < 0.02
+    }
+
+    pub fn is_killed(&self) -> bool {
+        self.low <= 0.001
+            && self.low_mid <= 0.001
+            && self.hi_mid <= 0.001
+            && self.hi <= 0.001
+    }
 }
 
-/// Per-channel live EQ: dry + Σ (gain-1) * band(sample).
-/// At all gains = 1.0 this is bit-identical to the dry signal.
+/// Per-channel live EQ.
+///
+/// Band-sum mix so knobs at 0% truly kill. All knobs at 0 → silence.
+/// All knobs near 100% → dry passthrough (bit-identical, no filter color).
 pub struct LiveEq {
     low: DirectForm1<f32>,
     low_mid: DirectForm1<f32>,
@@ -66,16 +83,29 @@ impl LiveEq {
 
     /// Process one sample. Stateful — call in order, never parallel-map.
     pub fn process(&mut self, sample: f32, gains: EqGains) -> f32 {
+        if gains.is_killed() {
+            // Still run filters so state stays consistent when knobs move again.
+            let _ = self.low.run(sample);
+            let _ = self.low_mid.run(sample);
+            let _ = self.hi_mid.run(sample);
+            let _ = self.hi.run(sample);
+            return 0.0;
+        }
+
         let low = self.low.run(sample);
         let low_mid = self.low_mid.run(sample);
         let hi_mid = self.hi_mid.run(sample);
         let hi = self.hi.run(sample);
 
-        sample
-            + (gains.low - 1.0) * low
-            + (gains.low_mid - 1.0) * low_mid
-            + (gains.hi_mid - 1.0) * hi_mid
-            + (gains.hi - 1.0) * hi
+        if gains.is_unity() {
+            return sample;
+        }
+
+        // Band-sum: each knob scales its band. All 0 → silence (handled above).
+        gains.low * low
+            + gains.low_mid * low_mid
+            + gains.hi_mid * hi_mid
+            + gains.hi * hi
     }
 }
 

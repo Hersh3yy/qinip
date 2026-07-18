@@ -11,12 +11,13 @@ use crate::decode::DecodedAudio;
 use crate::dev;
 use crate::eq::{band_waveform_peaks, BandWaveform, EqGains, BAND_COLORS, BAND_LABELS};
 use crate::key::detect_key;
+use crate::knob::eq_knob;
 use crate::playback::PlaybackEngine;
 use crate::playlist::{AnalysisState, Playlist};
 use crate::worker::{AnalysisWorker, WorkerJob, WorkerUpdate};
 
 struct AnalysisResult {
-    track_index: usize,
+    path: PathBuf,
     bpm: f32,
     key: String,
 }
@@ -28,14 +29,17 @@ pub struct DjApp {
     updates_rx: Receiver<WorkerUpdate>,
     analysis_tx: Sender<AnalysisResult>,
     analysis_rx: Receiver<AnalysisResult>,
-    audio_cache: HashMap<usize, Arc<DecodedAudio>>,
-    waveform_cache: HashMap<usize, BandWaveform>,
+    audio_cache: HashMap<PathBuf, Arc<DecodedAudio>>,
+    waveform_cache: HashMap<PathBuf, BandWaveform>,
     selected: Option<usize>,
     playing_track: Option<usize>,
     volume: f32,
     eq: EqGains,
     seek_slider: f64,
     status_message: String,
+    autoplay: bool,
+    was_playing: bool,
+    last_listen_at: Option<f64>,
 }
 
 impl DjApp {
@@ -64,6 +68,9 @@ impl DjApp {
             eq: EqGains::default(),
             seek_slider: 0.0,
             status_message: "Load a folder or drop MP3s to begin.".to_string(),
+            autoplay: true,
+            was_playing: false,
+            last_listen_at: None,
         }
     }
 
@@ -71,20 +78,24 @@ impl DjApp {
         while let Ok(update) = self.updates_rx.try_recv() {
             match update {
                 WorkerUpdate::TrackReady {
-                    track_index,
+                    path,
                     audio,
                     autoplay,
                 } => {
+                    let Some(track_index) = self.playlist.index_of(&path) else {
+                        continue;
+                    };
+
                     dev::log(format!(
-                        "track #{track_index} ready — {:.1}s, {} samples",
-                        audio.duration_secs(),
-                        audio.samples.len()
+                        "track ready {} — {:.1}s",
+                        path.display(),
+                        audio.duration_secs()
                     ));
 
                     let peak_start = std::time::Instant::now();
                     let mono = audio.downmix_to_mono();
                     let peaks = band_waveform_peaks(&mono, audio.sample_rate, 800);
-                    self.waveform_cache.insert(track_index, peaks);
+                    self.waveform_cache.insert(path.clone(), peaks);
                     dev::log_timing("band waveform peaks", peak_start);
 
                     if let Some(track) = self.playlist.tracks.get_mut(track_index) {
@@ -93,32 +104,33 @@ impl DjApp {
                     }
 
                     let audio = Arc::new(audio);
-                    self.audio_cache.insert(track_index, Arc::clone(&audio));
-                    self.spawn_analysis(track_index, audio);
+                    self.audio_cache.insert(path.clone(), Arc::clone(&audio));
+                    self.spawn_analysis(path.clone(), audio);
 
                     if autoplay {
                         self.play_track(track_index, true);
                     }
                 }
-                WorkerUpdate::Failed {
-                    track_index,
-                    message,
-                } => {
-                    if let Some(track) = self.playlist.tracks.get_mut(track_index) {
+                WorkerUpdate::Failed { path, message } => {
+                    if let Some(track_index) = self.playlist.index_of(&path)
+                        && let Some(track) = self.playlist.tracks.get_mut(track_index)
+                    {
                         track.analysis = AnalysisState::Failed(message.clone());
                     }
-                    self.status_message = format!("Track #{track_index} failed: {message}");
-                    dev::log(format!("track #{track_index} failed: {message}"));
+                    self.status_message = format!("{} failed: {message}", path.display());
+                    dev::log(format!("track failed {}: {message}", path.display()));
                 }
             }
         }
 
         while let Ok(result) = self.analysis_rx.try_recv() {
-            if let Some(track) = self.playlist.tracks.get_mut(result.track_index) {
+            if let Some(track_index) = self.playlist.index_of(&result.path)
+                && let Some(track) = self.playlist.tracks.get_mut(track_index)
+            {
                 track.set_analysis_result(result.bpm, result.key.clone());
                 dev::log(format!(
-                    "track #{} analysis done — {:.1} BPM, {} ({})",
-                    result.track_index,
+                    "analysis done {} — {:.1} BPM, {} ({})",
+                    result.path.display(),
                     result.bpm,
                     result.key,
                     track.camelot.as_deref().unwrap_or("?")
@@ -127,16 +139,16 @@ impl DjApp {
         }
     }
 
-    fn spawn_analysis(&self, track_index: usize, audio: Arc<DecodedAudio>) {
+    fn spawn_analysis(&self, path: PathBuf, audio: Arc<DecodedAudio>) {
         let tx = self.analysis_tx.clone();
         thread::spawn(move || {
             let start = std::time::Instant::now();
             let bpm_result = detect_bpm(&audio);
             let key_result = detect_key(&audio);
-            dev::log_timing(&format!("bpm+key track #{track_index}"), start);
+            dev::log_timing(&format!("bpm+key {}", path.display()), start);
 
             let _ = tx.send(AnalysisResult {
-                track_index,
+                path,
                 bpm: bpm_result.bpm,
                 key: key_result.key_name,
             });
@@ -144,43 +156,37 @@ impl DjApp {
     }
 
     fn load_folder(&mut self, folder: PathBuf) {
-        self.playlist.load_folder(&folder);
-        self.selected = None;
-        self.playing_track = None;
-        self.audio_cache.clear();
-        self.waveform_cache.clear();
-        let count = self.playlist.tracks.len();
+        let added = self.playlist.append_folder(&folder);
         self.status_message = format!(
-            "Loaded {count} tracks from {} — analyzing all…",
+            "Added {added} tracks from {} — analyzing…",
             folder.display()
         );
-        dev::log(format!("folder loaded: {}", folder.display()));
-        self.analyze_all();
+        dev::log(format!("folder appended ({added}): {}", folder.display()));
+        self.analyze_pending();
     }
 
     fn load_paths(&mut self, paths: Vec<PathBuf>) {
-        self.playlist.load_paths(paths);
-        self.selected = None;
-        self.playing_track = None;
-        self.audio_cache.clear();
-        self.waveform_cache.clear();
-        let count = self.playlist.tracks.len();
-        self.status_message = format!("Loaded {count} tracks — analyzing all…");
-        self.analyze_all();
+        let added = self.playlist.append_paths(paths);
+        self.status_message = format!("Added {added} tracks — analyzing…");
+        self.analyze_pending();
     }
 
-    fn analyze_all(&mut self) {
+    fn analyze_pending(&mut self) {
         let jobs: Vec<_> = self
             .playlist
             .tracks
             .iter()
-            .enumerate()
-            .filter(|(index, _)| !self.audio_cache.contains_key(index))
-            .map(|(index, track)| {
+            .filter(|track| !self.audio_cache.contains_key(&track.path))
+            .filter(|track| {
+                matches!(
+                    track.analysis,
+                    AnalysisState::Pending | AnalysisState::Failed(_)
+                )
+            })
+            .map(|track| {
                 (
-                    index,
+                    track.path.clone(),
                     WorkerJob::LoadTrack {
-                        track_index: index,
                         path: track.path.clone(),
                         autoplay: false,
                     },
@@ -188,8 +194,10 @@ impl DjApp {
             })
             .collect();
 
-        for (index, _) in &jobs {
-            if let Some(entry) = self.playlist.tracks.get_mut(*index) {
+        for (path, _) in &jobs {
+            if let Some(index) = self.playlist.index_of(path)
+                && let Some(entry) = self.playlist.tracks.get_mut(index)
+            {
                 entry.analysis = AnalysisState::Loading;
             }
         }
@@ -198,14 +206,27 @@ impl DjApp {
             self.worker.enqueue(job);
         }
 
-        self.status_message = "Analyzing all tracks in background…".to_string();
-        dev::log("queued analyze-all");
+        self.status_message = "Analyzing tracks in background…".to_string();
+        dev::log("queued analyze-pending");
     }
 
     fn select_track(&mut self, index: usize) {
         self.selected = Some(index);
+        if let Some(track) = self.playlist.tracks.get(index) {
+            self.status_message = format!("Selected {}", track.display_label());
+            dev::log(format!("selected track #{index}"));
+        }
+    }
 
-        if self.audio_cache.contains_key(&index) {
+    fn request_play(&mut self, index: usize) {
+        self.selected = Some(index);
+
+        if self
+            .playlist
+            .tracks
+            .get(index)
+            .is_some_and(|t| self.audio_cache.contains_key(&t.path))
+        {
             self.play_track(index, true);
             return;
         }
@@ -215,17 +236,19 @@ impl DjApp {
             let path = track.path.clone();
             let label = track.display_label();
             self.worker.enqueue(WorkerJob::LoadTrack {
-                track_index: index,
                 path,
                 autoplay: true,
             });
             self.status_message = format!("Loading {label}…");
-            dev::log(format!("selected track #{index}: {label}"));
+            dev::log(format!("request play #{index}: {label}"));
         }
     }
 
     fn play_track(&mut self, index: usize, restart: bool) {
-        let Some(audio) = self.audio_cache.get(&index).map(|a| (**a).clone()) else {
+        let Some(path) = self.playlist.tracks.get(index).map(|t| t.path.clone()) else {
+            return;
+        };
+        let Some(audio) = self.audio_cache.get(&path).map(|a| (**a).clone()) else {
             dev::log(format!("play_track #{index} — not in cache yet"));
             return;
         };
@@ -235,29 +258,135 @@ impl DjApp {
             let _ = self.playback.seek_secs(0.0);
         }
         let _ = self.playback.set_volume(self.volume);
+        let _ = self.playback.set_eq(self.eq);
         let _ = self.playback.play();
 
         self.playing_track = Some(index);
         self.selected = Some(index);
-        self.status_message = format!(
-            "Playing {}",
-            self.playlist.tracks[index].display_label()
-        );
+        self.last_listen_at = None;
+        self.was_playing = self
+            .playlist
+            .tracks
+            .get(index)
+            .is_some_and(|t| t.qualifies_as_played());
+        self.status_message = format!("Playing {}", self.playlist.tracks[index].display_label());
         dev::log(format!("playing track #{index}"));
+    }
+
+    fn play_next(&mut self) {
+        let Some(current) = self.playing_track else {
+            return;
+        };
+        let next = current + 1;
+        if next < self.playlist.tracks.len() {
+            dev::log(format!("autoplay next → #{next}"));
+            self.request_play(next);
+        } else {
+            self.playing_track = None;
+            self.was_playing = false;
+            self.status_message = "Playlist finished.".to_string();
+            dev::log("playlist finished");
+        }
+    }
+
+    fn remove_selected(&mut self) {
+        let Some(index) = self.selected else {
+            return;
+        };
+
+        let Some(removed) = self.playlist.remove_at(index) else {
+            return;
+        };
+
+        self.audio_cache.remove(&removed.path);
+        self.waveform_cache.remove(&removed.path);
+
+        if self.playing_track == Some(index) {
+            let _ = self.playback.pause();
+            self.playing_track = None;
+            self.was_playing = false;
+        } else if let Some(playing) = self.playing_track
+            && playing > index
+        {
+            self.playing_track = Some(playing - 1);
+        }
+
+        if self.playlist.tracks.is_empty() {
+            self.selected = None;
+        } else {
+            self.selected = Some(index.min(self.playlist.tracks.len() - 1));
+        }
+
+        self.status_message = format!("Removed {} from playlist", removed.display_label());
+        dev::log(format!("removed from playlist: {}", removed.path.display()));
     }
 
     fn toggle_playback(&mut self) {
         let status = self.playback.status();
         if status.is_playing() {
             let _ = self.playback.pause();
-        } else if let Some(index) = self.playing_track {
-            if status.position_secs() >= status.duration_secs().max(0.001) - 0.05 {
-                self.play_track(index, true);
-            } else {
-                let _ = self.playback.play();
-            }
+            self.last_listen_at = None;
+        } else if self.playing_track.is_some() {
+            let _ = self.playback.play();
         } else if let Some(index) = self.selected {
-            self.select_track(index);
+            self.request_play(index);
+        }
+    }
+
+    fn handle_keyboard(&mut self, ctx: &egui::Context) {
+        let enter = ctx.input(|i| i.key_pressed(egui::Key::Enter));
+        // macOS delete-key often arrives as Backspace; Delete covers Windows/Linux.
+        let remove = ctx.input(|i| {
+            i.key_pressed(egui::Key::Backspace) || i.key_pressed(egui::Key::Delete)
+        });
+
+        if enter && let Some(index) = self.selected {
+            self.request_play(index);
+        }
+        if remove {
+            self.remove_selected();
+        }
+    }
+
+    fn accumulate_listen_time(&mut self, now: f64) {
+        let playing = self.playback.status().is_playing();
+        if !playing {
+            self.last_listen_at = None;
+            return;
+        }
+
+        let Some(index) = self.playing_track else {
+            self.last_listen_at = None;
+            return;
+        };
+
+        if let Some(last) = self.last_listen_at {
+            let dt = now - last;
+            if dt > 0.0 && dt < 1.0 {
+                if let Some(track) = self.playlist.tracks.get_mut(index) {
+                    track.mark_listened(dt);
+                    if track.qualifies_as_played() {
+                        self.was_playing = true;
+                    }
+                }
+            }
+        }
+
+        self.last_listen_at = Some(now);
+    }
+
+    fn maybe_autoplay_next(&mut self) {
+        let status = self.playback.status();
+        let playing = status.is_playing();
+        let duration = status.duration_secs();
+        let position = status.position_secs();
+        let near_end = duration > 0.5 && position >= duration - 0.08;
+
+        // Only chain to next track if this one was actually listened to (≥20s).
+        if self.was_playing && !playing && near_end && self.autoplay {
+            self.was_playing = false;
+            self.last_listen_at = None;
+            self.play_next();
         }
     }
 
@@ -298,35 +427,34 @@ impl DjApp {
     fn draw_eq_knobs(&mut self, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.label("EQ");
+            ui.add_space(8.0);
+
             let mut changed = false;
-            let gains = [
+            let mut gains = [
                 (&mut self.eq.low, BAND_LABELS[0], BAND_COLORS[0]),
                 (&mut self.eq.low_mid, BAND_LABELS[1], BAND_COLORS[1]),
                 (&mut self.eq.hi_mid, BAND_LABELS[2], BAND_COLORS[2]),
                 (&mut self.eq.hi, BAND_LABELS[3], BAND_COLORS[3]),
             ];
 
-            for (gain, label, color) in gains {
-                let (r, g, b) = color;
-                ui.vertical(|ui| {
-                    ui.label(
-                        egui::RichText::new(label)
-                            .color(egui::Color32::from_rgb(r, g, b))
-                            .small(),
-                    );
-                    if ui
-                        .add(
-                            egui::Slider::new(gain, 0.0..=2.0)
-                                .vertical()
-                                .show_value(false),
-                        )
-                        .changed()
-                    {
-                        changed = true;
-                    }
-                    ui.label(format!("{:.0}%", *gain * 100.0));
+            for (gain, label, color) in &mut gains {
+                let (r, g, b) = *color;
+                let knob_color = egui::Color32::from_rgb(r, g, b);
+
+                // Fixed slot per knob — nested layouts were stacking all four on top of each other.
+                ui.allocate_ui(egui::vec2(58.0, 78.0), |ui| {
+                    ui.vertical_centered(|ui| {
+                        ui.label(
+                            egui::RichText::new(*label)
+                                .color(knob_color)
+                                .small(),
+                        );
+                        if eq_knob(ui, gain, knob_color).changed() {
+                            changed = true;
+                        }
+                        ui.label(format!("{:.0}%", **gain * 100.0));
+                    });
                 });
-                ui.add_space(8.0);
             }
 
             if ui.button("Reset EQ").clicked() {
@@ -346,7 +474,12 @@ impl DjApp {
             None => return,
         };
 
-        let Some(bands) = self.waveform_cache.get(&index).cloned() else {
+        let path = match self.playlist.tracks.get(index) {
+            Some(t) => t.path.clone(),
+            None => return,
+        };
+
+        let Some(bands) = self.waveform_cache.get(&path).cloned() else {
             ui.label("Waveform will appear once the track is decoded…");
             return;
         };
@@ -380,7 +513,6 @@ impl DjApp {
             .max(bands.hi.len())
             .max(1);
 
-        // Draw bands bottom→top so highs sit visually on top of lows.
         for (peaks, gain, (r, g, b)) in layers {
             if gain <= 0.001 || peaks.is_empty() {
                 continue;
@@ -417,6 +549,71 @@ impl DjApp {
             }
         }
     }
+
+    fn draw_title_cell(&self, ui: &mut egui::Ui, index: usize, width: f32) -> egui::Response {
+        let track = &self.playlist.tracks[index];
+        let selected = self.selected == Some(index);
+        let playing = self.playing_track == Some(index);
+        let label = if playing {
+            format!("▶ {}", track.title)
+        } else {
+            track.title.clone()
+        };
+
+        let fill = match &track.analysis {
+            AnalysisState::Failed(_) => egui::Color32::from_rgb(90, 30, 30),
+            AnalysisState::Done => egui::Color32::from_rgb(35, 70, 45),
+            AnalysisState::Loading | AnalysisState::Analyzing => egui::Color32::from_rgb(80, 70, 20),
+            AnalysisState::Pending => egui::Color32::from_gray(45),
+        };
+
+        let progress = track.analysis_progress();
+        let animate = matches!(
+            track.analysis,
+            AnalysisState::Loading | AnalysisState::Analyzing
+        );
+
+        let desired = egui::vec2(width, 22.0);
+        let (rect, response) = ui.allocate_exact_size(desired, egui::Sense::CLICK);
+
+        let painter = ui.painter_at(rect);
+        painter.rect_filled(rect, 3.0, egui::Color32::from_gray(28));
+        let filled = egui::Rect::from_min_size(
+            rect.min,
+            egui::vec2(rect.width() * progress, rect.height()),
+        );
+        painter.rect_filled(filled, 3.0, fill);
+
+        if selected {
+            painter.rect_stroke(
+                rect,
+                3.0,
+                egui::Stroke::new(1.5, egui::Color32::WHITE),
+                egui::StrokeKind::Inside,
+            );
+        }
+
+        if animate {
+            let pulse = ((ui.input(|i| i.time) as f32 * 3.0).sin() * 0.5 + 0.5) * 40.0;
+            painter.rect_stroke(
+                rect,
+                3.0,
+                egui::Stroke::new(1.0, egui::Color32::from_gray(120 + pulse as u8)),
+                egui::StrokeKind::Outside,
+            );
+        }
+
+        painter.text(
+            rect.left_center() + egui::vec2(8.0, 0.0),
+            egui::Align2::LEFT_CENTER,
+            label,
+            egui::FontId::proportional(13.0),
+            egui::Color32::WHITE,
+        );
+
+        response
+            .on_hover_text(track.filename_label())
+    }
 }
 
 impl eframe::App for DjApp {
@@ -424,11 +621,23 @@ impl eframe::App for DjApp {
         self.playback.poll();
         self.poll_worker();
         self.handle_drops(ctx);
+        self.handle_keyboard(ctx);
+
+        let now = ctx.input(|i| i.time);
+        self.accumulate_listen_time(now);
+        self.maybe_autoplay_next();
 
         let status = self.playback.status();
         if status.is_playing() {
             self.seek_slider = status.position_secs();
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        } else if self.playlist.tracks.iter().any(|t| {
+            matches!(
+                t.analysis,
+                AnalysisState::Loading | AnalysisState::Analyzing
+            )
+        }) {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
         }
     }
 
@@ -443,13 +652,11 @@ impl eframe::App for DjApp {
                     self.load_folder(folder);
                 }
 
-                if ui.button("Analyze All").clicked() {
-                    self.analyze_all();
-                }
-
                 if ui.button("▶ Play/Pause").clicked() {
                     self.toggle_playback();
                 }
+
+                ui.checkbox(&mut self.autoplay, "Autoplay");
 
                 ui.label(&self.status_message);
 
@@ -500,6 +707,13 @@ impl eframe::App for DjApp {
             ui.separator();
 
             ui.heading("Playlist");
+            ui.label(
+                egui::RichText::new(
+                    "Click = select · Double-click / Enter = play · Backspace = remove from list",
+                )
+                .small()
+                .weak(),
+            );
             ui.separator();
 
             if self.playlist.tracks.is_empty() {
@@ -508,67 +722,84 @@ impl eframe::App for DjApp {
             }
 
             let mut pending_select = None;
+            let mut pending_play = None;
 
-            egui::ScrollArea::vertical().show(ui, |ui| {
-                egui::Grid::new("playlist_grid")
-                    .num_columns(6)
-                    .spacing([12.0, 6.0])
-                    .striped(true)
-                    .show(ui, |ui| {
-                        ui.label(egui::RichText::new("Track").strong());
-                        ui.label(egui::RichText::new("Duration").strong());
-                        ui.label(egui::RichText::new("BPM").strong());
-                        ui.label(egui::RichText::new("Key").strong());
-                        ui.label(egui::RichText::new("Camelot").strong());
-                        ui.label(egui::RichText::new("Status").strong());
-                        ui.end_row();
+            // Reserve fixed widths for meta columns; Title takes the rest (full window).
+            let avail = ui.available_width();
+            let spacing = 12.0;
+            let fixed = 36.0  // #
+                + 160.0 // Artist
+                + 56.0  // Duration
+                + 48.0  // BPM
+                + 80.0  // Key
+                + 64.0  // Camelot
+                + 52.0  // Played
+                + spacing * 7.0;
+            let title_w = (avail - fixed).max(220.0);
 
-                        for index in 0..self.playlist.tracks.len() {
-                            let track = &self.playlist.tracks[index];
-                            let selected = self.selected == Some(index);
-                            let playing = self.playing_track == Some(index);
-
-                            let label = if playing {
-                                format!("▶ {}", track.display_label())
-                            } else {
-                                track.display_label()
-                            };
-
-                            let response = ui.selectable_label(selected, label);
-                            if response.clicked() {
-                                pending_select = Some(index);
-                            }
-
-                            ui.label(track.duration_label());
-
-                            let bpm_text = track.bpm_label();
-                            let key_text = track.key_label();
-                            let camelot_text = track.camelot_label();
-                            let status_text = track.status_label();
-
-                            let value_color = match &track.analysis {
-                                AnalysisState::Failed(_) => egui::Color32::RED,
-                                AnalysisState::Done => egui::Color32::LIGHT_GREEN,
-                                AnalysisState::Loading | AnalysisState::Analyzing => {
-                                    egui::Color32::YELLOW
-                                }
-                                AnalysisState::Pending => egui::Color32::GRAY,
-                            };
-
-                            ui.label(egui::RichText::new(bpm_text).color(value_color));
-                            ui.label(egui::RichText::new(key_text).color(value_color));
-                            ui.label(
-                                egui::RichText::new(camelot_text)
-                                    .color(value_color)
-                                    .strong(),
-                            );
-                            ui.label(egui::RichText::new(status_text).color(value_color));
+            egui::ScrollArea::both()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.set_min_width(avail);
+                    egui::Grid::new("playlist_grid")
+                        .num_columns(8)
+                        .spacing([spacing, 6.0])
+                        .striped(true)
+                        .min_col_width(36.0)
+                        .show(ui, |ui| {
+                            ui.label(egui::RichText::new("#").strong());
+                            ui.label(egui::RichText::new("Artist").strong());
+                            ui.label(egui::RichText::new("Title").strong());
+                            ui.label(egui::RichText::new("Duration").strong());
+                            ui.label(egui::RichText::new("BPM").strong());
+                            ui.label(egui::RichText::new("Key").strong());
+                            ui.label(egui::RichText::new("Camelot").strong());
+                            ui.label(egui::RichText::new("Played").strong());
                             ui.end_row();
-                        }
-                    });
-            });
 
-            if let Some(index) = pending_select {
+                            for index in 0..self.playlist.tracks.len() {
+                                let track = &self.playlist.tracks[index];
+                                ui.label(track.track_number_label());
+                                ui.add(
+                                    egui::Label::new(&track.artist)
+                                        .truncate(),
+                                );
+
+                                let response = self.draw_title_cell(ui, index, title_w);
+                                if response.double_clicked() {
+                                    pending_play = Some(index);
+                                } else if response.clicked() {
+                                    pending_select = Some(index);
+                                }
+
+                                let track = &self.playlist.tracks[index];
+                                ui.label(track.duration_label());
+
+                                let value_color = match &track.analysis {
+                                    AnalysisState::Failed(_) => egui::Color32::RED,
+                                    AnalysisState::Done => egui::Color32::LIGHT_GREEN,
+                                    AnalysisState::Loading | AnalysisState::Analyzing => {
+                                        egui::Color32::YELLOW
+                                    }
+                                    AnalysisState::Pending => egui::Color32::GRAY,
+                                };
+
+                                ui.label(egui::RichText::new(track.bpm_label()).color(value_color));
+                                ui.label(egui::RichText::new(track.key_label()).color(value_color));
+                                ui.label(
+                                    egui::RichText::new(track.camelot_label())
+                                        .color(value_color)
+                                        .strong(),
+                                );
+                                ui.label(if track.played { "✓" } else { "—" });
+                                ui.end_row();
+                            }
+                        });
+                });
+
+            if let Some(index) = pending_play {
+                self.request_play(index);
+            } else if let Some(index) = pending_select {
                 self.select_track(index);
             }
         });

@@ -9,3 +9,4 @@ pub mod worker;
 pub mod app;
 pub mod dev;
 pub mod eq;
+pub mod knob;

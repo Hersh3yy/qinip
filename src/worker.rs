@@ -9,7 +9,6 @@ use crate::dev;
 #[derive(Debug)]
 pub enum WorkerJob {
     LoadTrack {
-        track_index: usize,
         path: PathBuf,
         autoplay: bool,
     },
@@ -18,12 +17,12 @@ pub enum WorkerJob {
 #[derive(Debug)]
 pub enum WorkerUpdate {
     TrackReady {
-        track_index: usize,
+        path: PathBuf,
         audio: DecodedAudio,
         autoplay: bool,
     },
     Failed {
-        track_index: usize,
+        path: PathBuf,
         message: String,
     },
 }
@@ -79,11 +78,7 @@ fn worker_loop(job_rx: Receiver<WorkerJob>, update_tx: Sender<WorkerUpdate>) {
             }
         };
 
-        let WorkerJob::LoadTrack {
-            track_index,
-            path,
-            autoplay,
-        } = job;
+        let WorkerJob::LoadTrack { path, autoplay } = job;
 
         let path_display = path.display().to_string();
         dev::log(format!("decoding {path_display}"));
@@ -95,7 +90,7 @@ fn worker_loop(job_rx: Receiver<WorkerJob>, update_tx: Sender<WorkerUpdate>) {
             Ok(audio) => audio,
             Err(_) => {
                 let _ = update_tx.send(WorkerUpdate::Failed {
-                    track_index,
+                    path,
                     message: "decode panicked".to_string(),
                 });
                 continue;
@@ -105,7 +100,7 @@ fn worker_loop(job_rx: Receiver<WorkerJob>, update_tx: Sender<WorkerUpdate>) {
 
         if update_tx
             .send(WorkerUpdate::TrackReady {
-                track_index,
+                path,
                 audio,
                 autoplay,
             })
