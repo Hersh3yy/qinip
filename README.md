@@ -20,7 +20,7 @@ Same idea here: load a bunch of songs, crack one open, see the waveform inside. 
 
 ## Support
 
-Qinip is free — download, use, share. If it saves you time or money, tips are welcome (add your Ko-fi / GitHub Sponsors link on the repo when ready).
+Qinip is free — download, use, share. If it saves you time or money, tips are welcome in the form of information, knowledge, and/or compliments.
 
 ---
 
