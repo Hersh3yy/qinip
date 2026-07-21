@@ -10,6 +10,7 @@ identifier = "com.hirenbudhrani.dj-player"
 category = "public.app-category.music"
 short_description = "MP3 pack audition player"
 osx_minimum_system_version = "11.0"
+icon = "assets/icon.png"
 
 [[bin]]
 name = "analyze"
@@ -30,3 +31,4 @@ ringbuf = "0.5.1"
 rustfft = "6.4.1"
 symphonia = { version = "0.5.4", features = ["mp3"] }
 walkdir = "2.5.0"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }

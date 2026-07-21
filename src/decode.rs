@@ -1,5 +1,6 @@
 use std::fs::File;
 use std::path::Path;
+use std::sync::Arc;
 
 use symphonia::core::audio::{SampleBuffer, SignalSpec};
 use symphonia::core::codecs::{CODEC_TYPE_NULL, DecoderOptions};
@@ -19,7 +20,11 @@ pub struct TrackMetadata {
 
 #[derive(Clone, Debug)]
 pub struct DecodedAudio {
-    pub samples: Vec<f32>,
+    /// Interleaved samples, shared via `Arc` so callers (playlist cache,
+    /// playback engine, analysis threads) can each hold a reference to the
+    /// *same* decoded buffer instead of copying it. Cloning `DecodedAudio`
+    /// only bumps a reference count — it never duplicates the audio data.
+    pub samples: Arc<[f32]>,
     pub sample_rate: u32,
     pub channels: usize,
 }
@@ -48,7 +53,7 @@ impl DecodedAudio {
     /// Average interleaved channels down to a single mono signal.
     pub fn downmix_to_mono(&self) -> Vec<f32> {
         if self.channels <= 1 {
-            return self.samples.clone();
+            return self.samples.to_vec();
         }
 
         let frame_count = self.samples.len() / self.channels;
@@ -184,7 +189,7 @@ pub fn decode_to_samples(path: &str) -> Result<DecodedAudio, String> {
     }
 
     Ok(DecodedAudio {
-        samples,
+        samples: Arc::from(samples),
         sample_rate,
         channels,
     })

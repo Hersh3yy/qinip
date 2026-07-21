@@ -9,8 +9,12 @@ fn main() -> eframe::Result<()> {
         eprintln!("Run with: DJ_PLAYER_DEV=1 cargo run --release");
     }
 
+    let icon = std::sync::Arc::new(dj_player::app::load_app_icon());
+
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([1100.0, 700.0]),
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([1100.0, 700.0])
+            .with_icon(icon),
         ..Default::default()
     };
 

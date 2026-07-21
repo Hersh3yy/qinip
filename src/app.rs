@@ -10,17 +10,59 @@ use crate::bpm::detect_bpm;
 use crate::decode::DecodedAudio;
 use crate::dev;
 use crate::eq::{band_waveform_peaks, BandWaveform, EqGains, BAND_COLORS, BAND_LABELS};
+use crate::file_ops;
 use crate::key::detect_key;
 use crate::knob::eq_knob;
 use crate::playback::PlaybackEngine;
-use crate::playlist::{AnalysisState, Playlist};
+use crate::playlist::{AnalysisState, Playlist, SortColumn, SortDirection};
 use crate::tags;
+use crate::transport::transport_button;
 use crate::worker::{AnalysisWorker, WorkerJob, WorkerUpdate};
 
 struct AnalysisResult {
     path: PathBuf,
+    /// `Ok((bpm, key_name))` on success, `Err(message)` if detection failed
+    /// or panicked — either way the UI shows it, it never just hangs on
+    /// "Analyzing…" forever.
+    outcome: Result<(f32, String), String>,
+}
+
+/// Resizable playlist column widths (Title column takes remaining space).
+#[derive(Clone)]
+struct PlaylistColumns {
+    track_num: f32,
+    artist: f32,
+    title: f32,
+    duration: f32,
     bpm: f32,
-    key: String,
+    key: f32,
+    camelot: f32,
+    played: f32,
+}
+
+impl Default for PlaylistColumns {
+    fn default() -> Self {
+        Self {
+            track_num: 36.0,
+            artist: 160.0,
+            title: 220.0,
+            duration: 56.0,
+            bpm: 48.0,
+            key: 80.0,
+            camelot: 64.0,
+            played: 52.0,
+        }
+    }
+}
+
+impl PlaylistColumns {
+    fn fixed_width(&self) -> f32 {
+        self.track_num + self.artist + self.duration + self.bpm + self.key + self.camelot + self.played
+    }
+
+    fn title_width(&self, avail: f32, spacing: f32) -> f32 {
+        (avail - self.fixed_width() - spacing * 7.0).max(self.title)
+    }
 }
 
 pub struct DjApp {
@@ -43,14 +85,18 @@ pub struct DjApp {
     last_listen_at: Option<f64>,
     /// When set, show a confirm dialog before deleting this playlist index from disk.
     confirm_delete: Option<usize>,
+    playlist_sort: Option<(SortColumn, SortDirection)>,
+    playlist_columns: PlaylistColumns,
 }
 
 impl DjApp {
-    pub fn new(_cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         if dev::enabled() {
             eprintln!("[dev] DJ_PLAYER_DEV enabled — logging to stderr");
             eprintln!("[dev] tip: use `cargo run --release` for ~18x faster analysis");
         }
+
+        cc.egui_ctx.set_visuals(hardware_theme_visuals());
 
         let playback = PlaybackEngine::new().expect("failed to start audio output");
         let (worker, updates_rx) = AnalysisWorker::spawn();
@@ -75,6 +121,8 @@ impl DjApp {
             was_playing: false,
             last_listen_at: None,
             confirm_delete: None,
+            playlist_sort: None,
+            playlist_columns: PlaylistColumns::default(),
         }
     }
 
@@ -128,34 +176,48 @@ impl DjApp {
         }
 
         while let Ok(result) = self.analysis_rx.try_recv() {
-            if let Some(track_index) = self.playlist.index_of(&result.path)
-                && let Some(track) = self.playlist.tracks.get_mut(track_index)
-            {
-                track.set_analysis_result(result.bpm, result.key.clone());
+            self.apply_analysis_result(result);
+        }
+    }
+
+    /// Update the matching playlist row with a finished analysis — success
+    /// or failure, so a bad file never leaves the row stuck on "Analyzing…".
+    fn apply_analysis_result(&mut self, result: AnalysisResult) {
+        let Some(track_index) = self.playlist.index_of(&result.path) else {
+            return;
+        };
+        let Some(track) = self.playlist.tracks.get_mut(track_index) else {
+            return;
+        };
+
+        match result.outcome {
+            Ok((bpm, key)) => {
                 dev::log(format!(
-                    "analysis done {} — {:.1} BPM, {} ({})",
+                    "analysis done {} — {:.1} BPM, {key}",
                     result.path.display(),
-                    result.bpm,
-                    result.key,
-                    track.camelot.as_deref().unwrap_or("?")
+                    bpm
                 ));
+                track.set_analysis_result(bpm, key);
+            }
+            Err(message) => {
+                dev::log(format!("analysis failed {}: {message}", result.path.display()));
+                track.analysis = AnalysisState::Failed(message);
             }
         }
     }
 
+    /// Runs BPM + key detection on a background thread and reports the
+    /// result back over `analysis_tx`. Wrapped in `catch_unwind` — a bad file
+    /// tripping a panic inside `detect_bpm`/`detect_key` (see e.g. aubio's
+    /// `.expect()` calls) must only fail that one track, not take down the
+    /// thread silently or, worse, the whole app.
     fn spawn_analysis(&self, path: PathBuf, audio: Arc<DecodedAudio>) {
         let tx = self.analysis_tx.clone();
         thread::spawn(move || {
             let start = std::time::Instant::now();
-            let bpm_result = detect_bpm(&audio);
-            let key_result = detect_key(&audio);
+            let outcome = run_bpm_key_analysis(&audio);
             dev::log_timing(&format!("bpm+key {}", path.display()), start);
-
-            let _ = tx.send(AnalysisResult {
-                path,
-                bpm: bpm_result.bpm,
-                key: key_result.key_name,
-            });
+            let _ = tx.send(AnalysisResult { path, outcome });
         });
     }
 
@@ -252,7 +314,10 @@ impl DjApp {
         let Some(path) = self.playlist.tracks.get(index).map(|t| t.path.clone()) else {
             return;
         };
-        let Some(audio) = self.audio_cache.get(&path).map(|a| (**a).clone()) else {
+        // `audio_cache` holds one decoded copy per track; `Arc::clone` here just
+        // shares that same buffer with the playback engine (cheap refcount bump),
+        // rather than duplicating the multi-megabyte sample data on every play.
+        let Some(audio) = self.audio_cache.get(&path).map(Arc::clone) else {
             dev::log(format!("play_track #{index} — not in cache yet"));
             return;
         };
@@ -278,18 +343,110 @@ impl DjApp {
     }
 
     fn play_next(&mut self) {
-        let Some(current) = self.playing_track else {
+        let Some(current) = self.playing_track.or(self.selected) else {
             return;
         };
         let next = current + 1;
         if next < self.playlist.tracks.len() {
-            dev::log(format!("autoplay next → #{next}"));
+            dev::log(format!("next → #{next}"));
             self.request_play(next);
         } else {
             self.playing_track = None;
             self.was_playing = false;
             self.status_message = "Playlist finished.".to_string();
             dev::log("playlist finished");
+        }
+    }
+
+    fn play_previous(&mut self) {
+        let Some(current) = self.playing_track.or(self.selected) else {
+            return;
+        };
+        if current > 0 {
+            dev::log(format!("previous → #{}", current - 1));
+            self.request_play(current - 1);
+        }
+    }
+
+    fn stop_playback(&mut self) {
+        let _ = self.playback.pause();
+        let _ = self.playback.seek_secs(0.0);
+        self.seek_slider = 0.0;
+        self.last_listen_at = None;
+        self.status_message = "Stopped.".to_string();
+        dev::log("stop");
+    }
+
+    fn seek_relative(&mut self, delta_secs: f64) {
+        let status = self.playback.status();
+        let duration = status.duration_secs();
+        if duration <= 0.0 {
+            return;
+        }
+        let pos = (self.seek_slider + delta_secs).clamp(0.0, duration);
+        self.seek_slider = pos;
+        let _ = self.playback.seek_secs(pos);
+        dev::log(format!("seek relative {delta_secs:+.0}s → {pos:.1}s"));
+    }
+
+    fn has_transport_target(&self) -> bool {
+        !self.playlist.tracks.is_empty()
+            && (self.playing_track.is_some()
+                || self.selected.is_some()
+                || self.playback.status().duration_secs() > 0.0)
+    }
+
+    fn can_play_or_pause(&self) -> bool {
+        !self.playlist.tracks.is_empty()
+    }
+
+    fn cycle_sort_for_column(&mut self, column: SortColumn) {
+        self.playlist_sort = match self.playlist_sort {
+            Some((col, SortDirection::Asc)) if col == column => Some((column, SortDirection::Desc)),
+            Some((col, SortDirection::Desc)) if col == column => None,
+            _ => Some((column, SortDirection::Asc)),
+        };
+        self.apply_playlist_sort();
+    }
+
+    fn apply_playlist_sort(&mut self) {
+        let playing_path = self
+            .playing_track
+            .and_then(|i| self.playlist.tracks.get(i).map(|t| t.path.clone()));
+        let selected_path = self
+            .selected
+            .and_then(|i| self.playlist.tracks.get(i).map(|t| t.path.clone()));
+
+        match self.playlist_sort {
+            Some((column, direction)) => self.playlist.sort_by(column, direction),
+            None => self.playlist.restore_load_order(),
+        }
+
+        self.playing_track = playing_path
+            .as_ref()
+            .and_then(|path| self.playlist.index_of(path));
+        self.selected = selected_path
+            .as_ref()
+            .and_then(|path| self.playlist.index_of(path));
+    }
+
+    fn reveal_track_in_file_manager(&mut self, index: usize) {
+        let Some(track) = self.playlist.tracks.get(index) else {
+            return;
+        };
+        match file_ops::reveal_in_file_manager(&track.path) {
+            Ok(()) => self.status_message = format!("Revealed {}", track.filename_label()),
+            Err(err) => self.status_message = err,
+        }
+    }
+
+    fn show_track_folder(&mut self, index: usize) {
+        let Some(track) = self.playlist.tracks.get(index) else {
+            return;
+        };
+        match file_ops::show_enclosing_folder(&track.path) {
+            Ok(()) => self.status_message = "Opened enclosing folder.".to_string(),
+            Err(err) => self.status_message = err,
         }
     }
 
@@ -556,8 +713,7 @@ impl DjApp {
                 let (r, g, b) = *color;
                 let knob_color = egui::Color32::from_rgb(r, g, b);
 
-                // Fixed slot per knob — nested layouts were stacking all four on top of each other.
-                ui.allocate_ui(egui::vec2(58.0, 78.0), |ui| {
+                ui.allocate_ui(egui::vec2(58.0, 88.0), |ui| {
                     ui.vertical_centered(|ui| {
                         ui.label(
                             egui::RichText::new(*label)
@@ -580,6 +736,51 @@ impl DjApp {
             if changed {
                 let _ = self.playback.set_eq(self.eq);
             }
+
+            ui.separator();
+            self.draw_transport_controls(ui);
+        });
+    }
+
+    fn draw_transport_controls(&mut self, ui: &mut egui::Ui) {
+        let playing = self.playback.status().is_playing();
+        let can_transport = self.has_transport_target();
+        let can_play = self.can_play_or_pause();
+
+        let green = egui::Color32::from_rgb(45, 198, 83);
+        let amber = egui::Color32::from_rgb(232, 150, 4);
+        let cyan = egui::Color32::from_rgb(76, 201, 240);
+
+        ui.vertical(|ui| {
+            ui.label(egui::RichText::new("Transport").small().weak());
+            ui.horizontal(|ui| {
+                if transport_button(ui, "⏮", cyan, can_transport, false) {
+                    self.play_previous();
+                }
+                if transport_button(
+                    ui,
+                    if playing { "⏸" } else { "▶" },
+                    green,
+                    can_play,
+                    playing,
+                ) {
+                    self.toggle_playback();
+                }
+                if transport_button(ui, "⏭", cyan, can_transport, false) {
+                    self.play_next();
+                }
+                if transport_button(ui, "⏹", amber, can_transport, false) {
+                    self.stop_playback();
+                }
+            });
+            ui.horizontal(|ui| {
+                if transport_button(ui, "−10", cyan, can_transport, false) {
+                    self.seek_relative(-10.0);
+                }
+                if transport_button(ui, "+10", cyan, can_transport, false) {
+                    self.seek_relative(10.0);
+                }
+            });
         });
     }
 
@@ -690,6 +891,7 @@ impl DjApp {
 
         let desired = egui::vec2(width, 22.0);
         let (rect, response) = ui.allocate_exact_size(desired, egui::Sense::CLICK);
+        let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
 
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 3.0, egui::Color32::from_gray(28));
@@ -815,10 +1017,6 @@ impl eframe::App for DjApp {
                     self.load_folder(folder);
                 }
 
-                if ui.button("▶ Play/Pause").clicked() {
-                    self.toggle_playback();
-                }
-
                 ui.checkbox(&mut self.autoplay, "Autoplay");
 
                 ui.label(&self.status_message);
@@ -872,7 +1070,7 @@ impl eframe::App for DjApp {
             ui.heading("Playlist");
             ui.label(
                 egui::RichText::new(
-                    "Click = select · Double-click / Enter = play · Backspace = remove from list · Right-click = more",
+                    "Click = select · Double-click / Enter = play · Header click = sort (▲/▼/off) · Drag header edge = resize column · Right-click = more",
                 )
                 .small()
                 .weak(),
@@ -890,19 +1088,15 @@ impl eframe::App for DjApp {
             let mut pending_delete = None;
             let mut pending_move = None;
             let mut pending_tags = None;
+            let mut pending_reveal = None;
+            let mut pending_show_folder = None;
+            let mut pending_sort: Option<SortColumn> = None;
 
-            // Reserve fixed widths for meta columns; Title takes the rest (full window).
             let avail = ui.available_width();
             let spacing = 12.0;
-            let fixed = 36.0  // #
-                + 160.0 // Artist
-                + 56.0  // Duration
-                + 48.0  // BPM
-                + 80.0  // Key
-                + 64.0  // Camelot
-                + 52.0  // Played
-                + spacing * 7.0;
-            let title_w = (avail - fixed).max(220.0);
+            let sort_state = self.playlist_sort;
+            let mut cols = self.playlist_columns.clone();
+            let title_w = cols.title_width(avail, spacing);
 
             egui::ScrollArea::both()
                 .auto_shrink([false, false])
@@ -914,20 +1108,110 @@ impl eframe::App for DjApp {
                         .striped(true)
                         .min_col_width(36.0)
                         .show(ui, |ui| {
-                            ui.label(egui::RichText::new("#").strong());
-                            ui.label(egui::RichText::new("Artist").strong());
-                            ui.label(egui::RichText::new("Title").strong());
-                            ui.label(egui::RichText::new("Duration").strong());
-                            ui.label(egui::RichText::new("BPM").strong());
-                            ui.label(egui::RichText::new("Key").strong());
-                            ui.label(egui::RichText::new("Camelot").strong());
-                            ui.label(egui::RichText::new("Played").strong());
+                            let track_hdr = draw_column_header(
+                                ui,
+                                "#",
+                                cols.track_num,
+                                SortColumn::TrackNumber,
+                                sort_state,
+                            );
+                            if track_hdr.sort_clicked {
+                                pending_sort = Some(SortColumn::TrackNumber);
+                            }
+                            cols.track_num = track_hdr.width;
+
+                            let artist_hdr = draw_column_header(
+                                ui,
+                                "Artist",
+                                cols.artist,
+                                SortColumn::Artist,
+                                sort_state,
+                            );
+                            if artist_hdr.sort_clicked {
+                                pending_sort = Some(SortColumn::Artist);
+                            }
+                            cols.artist = artist_hdr.width;
+
+                            let title_hdr = draw_column_header(
+                                ui,
+                                "Title",
+                                title_w,
+                                SortColumn::Title,
+                                sort_state,
+                            );
+                            if title_hdr.sort_clicked {
+                                pending_sort = Some(SortColumn::Title);
+                            }
+                            cols.title = title_hdr.width.max(120.0);
+                            let title_w = cols.title_width(avail, spacing).max(cols.title);
+
+                            let dur_hdr = draw_column_header(
+                                ui,
+                                "Duration",
+                                cols.duration,
+                                SortColumn::Duration,
+                                sort_state,
+                            );
+                            if dur_hdr.sort_clicked {
+                                pending_sort = Some(SortColumn::Duration);
+                            }
+                            cols.duration = dur_hdr.width;
+
+                            let bpm_hdr = draw_column_header(
+                                ui,
+                                "BPM",
+                                cols.bpm,
+                                SortColumn::Bpm,
+                                sort_state,
+                            );
+                            if bpm_hdr.sort_clicked {
+                                pending_sort = Some(SortColumn::Bpm);
+                            }
+                            cols.bpm = bpm_hdr.width;
+
+                            let key_hdr = draw_column_header(
+                                ui,
+                                "Key",
+                                cols.key,
+                                SortColumn::Key,
+                                sort_state,
+                            );
+                            if key_hdr.sort_clicked {
+                                pending_sort = Some(SortColumn::Key);
+                            }
+                            cols.key = key_hdr.width;
+
+                            let cam_hdr = draw_column_header(
+                                ui,
+                                "Camelot",
+                                cols.camelot,
+                                SortColumn::Camelot,
+                                sort_state,
+                            );
+                            if cam_hdr.sort_clicked {
+                                pending_sort = Some(SortColumn::Camelot);
+                            }
+                            cols.camelot = cam_hdr.width;
+
+                            let played_hdr = draw_column_header(
+                                ui,
+                                "Played",
+                                cols.played,
+                                SortColumn::Played,
+                                sort_state,
+                            );
+                            if played_hdr.sort_clicked {
+                                pending_sort = Some(SortColumn::Played);
+                            }
+                            cols.played = played_hdr.width;
+
                             ui.end_row();
 
                             for index in 0..self.playlist.tracks.len() {
                                 let track = &self.playlist.tracks[index];
-                                ui.label(track.track_number_label());
-                                ui.add(egui::Label::new(&track.artist).truncate());
+
+                                playlist_cell_label(ui, track.track_number_label(), cols.track_num);
+                                playlist_cell_label(ui, &track.artist, cols.artist);
 
                                 let response = self.draw_title_cell(ui, index, title_w);
                                 if response.double_clicked() {
@@ -942,6 +1226,15 @@ impl eframe::App for DjApp {
                                     }
                                     if ui.button("Remove from playlist").clicked() {
                                         pending_remove = Some(index);
+                                        ui.close();
+                                    }
+                                    ui.separator();
+                                    if ui.button(file_ops::reveal_menu_label()).clicked() {
+                                        pending_reveal = Some(index);
+                                        ui.close();
+                                    }
+                                    if ui.button("Show enclosing folder").clicked() {
+                                        pending_show_folder = Some(index);
                                         ui.close();
                                     }
                                     ui.separator();
@@ -967,7 +1260,7 @@ impl eframe::App for DjApp {
                                 });
 
                                 let track = &self.playlist.tracks[index];
-                                ui.label(track.duration_label());
+                                playlist_cell_label(ui, track.duration_label(), cols.duration);
 
                                 let value_color = match &track.analysis {
                                     AnalysisState::Failed(_) => egui::Color32::RED,
@@ -978,19 +1271,39 @@ impl eframe::App for DjApp {
                                     AnalysisState::Pending => egui::Color32::GRAY,
                                 };
 
-                                ui.label(egui::RichText::new(track.bpm_label()).color(value_color));
-                                ui.label(egui::RichText::new(track.key_label()).color(value_color));
-                                ui.label(
-                                    egui::RichText::new(track.camelot_label())
-                                        .color(value_color)
-                                        .strong(),
+                                playlist_cell_rich(
+                                    ui,
+                                    track.bpm_label(),
+                                    cols.bpm,
+                                    value_color,
                                 );
-                                ui.label(if track.played { "✓" } else { "—" });
+                                playlist_cell_rich(
+                                    ui,
+                                    track.key_label(),
+                                    cols.key,
+                                    value_color,
+                                );
+                                playlist_cell_rich(
+                                    ui,
+                                    track.camelot_label(),
+                                    cols.camelot,
+                                    value_color,
+                                );
+                                playlist_cell_label(
+                                    ui,
+                                    if track.played { "✓" } else { "—" },
+                                    cols.played,
+                                );
                                 ui.end_row();
                             }
                         });
                 });
 
+            self.playlist_columns = cols;
+
+            if let Some(column) = pending_sort {
+                self.cycle_sort_for_column(column);
+            }
             if let Some(index) = pending_play {
                 self.request_play(index);
             } else if let Some(index) = pending_select {
@@ -1009,8 +1322,190 @@ impl eframe::App for DjApp {
             if let Some(index) = pending_tags {
                 self.write_tags_for(index);
             }
+            if let Some(index) = pending_reveal {
+                self.reveal_track_in_file_manager(index);
+            }
+            if let Some(index) = pending_show_folder {
+                self.show_track_folder(index);
+            }
         });
     }
+}
+
+struct ColumnHeaderResult {
+    sort_clicked: bool,
+    width: f32,
+}
+
+/// Click the label to cycle sort (asc → desc → none). Drag the right edge to resize.
+fn draw_column_header(
+    ui: &mut egui::Ui,
+    label: &str,
+    width: f32,
+    column: SortColumn,
+    active_sort: Option<(SortColumn, SortDirection)>,
+) -> ColumnHeaderResult {
+    let total_w = width + 6.0;
+    let (rect, _) = ui.allocate_exact_size(egui::vec2(total_w, 20.0), egui::Sense::hover());
+    let label_rect = egui::Rect::from_min_size(rect.min, egui::vec2(width, rect.height()));
+    let resize_rect = egui::Rect::from_min_size(
+        egui::pos2(rect.left() + width, rect.top()),
+        egui::vec2(6.0, rect.height()),
+    );
+
+    let text = sort_header_label(label, column, active_sort);
+    let label_resp = ui.interact(label_rect, ui.id().with(label).with(column), egui::Sense::click());
+    let sort_clicked = label_resp.clicked();
+    let _ = label_resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+    let is_sorted = active_sort.is_some_and(|(col, _)| col == column);
+    let header_color = if is_sorted {
+        egui::Color32::from_rgb(0xE8, 0xA9, 0x3C)
+    } else {
+        ui.visuals().text_color()
+    };
+    ui.painter().text(
+        label_rect.left_center() + egui::vec2(0.0, 0.0),
+        egui::Align2::LEFT_CENTER,
+        text,
+        egui::FontId::proportional(13.0),
+        header_color,
+    );
+
+    let resize_resp = ui.interact(resize_rect, ui.id().with(label).with("resize"), egui::Sense::drag());
+    let resize_delta = resize_resp.drag_delta();
+    let _ = resize_resp.on_hover_cursor(egui::CursorIcon::ResizeHorizontal);
+    ui.painter().line_segment(
+        [
+            egui::pos2(resize_rect.center().x, resize_rect.top() + 2.0),
+            egui::pos2(resize_rect.center().x, resize_rect.bottom() - 2.0),
+        ],
+        egui::Stroke::new(1.0, egui::Color32::from_gray(90)),
+    );
+
+    let mut new_width = width;
+    if resize_delta.x != 0.0 {
+        new_width = (width + resize_delta.x).clamp(36.0, 600.0);
+    }
+
+    ColumnHeaderResult {
+        sort_clicked,
+        width: new_width,
+    }
+}
+
+fn sort_header_label(
+    label: &str,
+    column: SortColumn,
+    active_sort: Option<(SortColumn, SortDirection)>,
+) -> String {
+    match active_sort {
+        Some((col, SortDirection::Asc)) if col == column => format!("{label} ▲"),
+        Some((col, SortDirection::Desc)) if col == column => format!("{label} ▼"),
+        _ => label.to_string(),
+    }
+}
+
+fn playlist_cell_label(ui: &mut egui::Ui, text: impl AsRef<str>, width: f32) {
+    let resp = ui.add(
+        egui::Label::new(text.as_ref())
+            .selectable(false)
+            .truncate()
+            .sense(egui::Sense::click()),
+    );
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+    let _ = width;
+}
+
+fn playlist_cell_rich(ui: &mut egui::Ui, text: String, width: f32, color: egui::Color32) {
+    let resp = ui.add(
+        egui::Label::new(egui::RichText::new(text).color(color))
+            .selectable(false)
+            .sense(egui::Sense::click()),
+    );
+    resp.on_hover_cursor(egui::CursorIcon::PointingHand);
+    let _ = width;
+}
+
+/// Load the app window icon from the bundled PNG/JPEG asset.
+pub fn load_app_icon() -> egui::IconData {
+    let bytes = include_bytes!("../assets/icon.png");
+    let img = image::load_from_memory(bytes).expect("app icon must decode");
+    let img = img.to_rgba8();
+    let (width, height) = img.dimensions();
+    egui::IconData {
+        rgba: img.into_raw(),
+        width,
+        height,
+    }
+}
+
+/// Custom look for the app, applied once at startup instead of egui's
+/// generic default dark theme — dark anodized-aluminum panels with a warm
+/// amber accent, in the spirit of a hardware mixer's control surface
+/// (see `knob.rs` for the matching EQ knobs).
+fn hardware_theme_visuals() -> egui::Visuals {
+    let panel = egui::Color32::from_rgb(0x2A, 0x2C, 0x2E);
+    let recessed = egui::Color32::from_rgb(0x1C, 0x1D, 0x1E);
+    let control_rest = egui::Color32::from_rgb(0x3A, 0x3C, 0x3E);
+    let control_hover = egui::Color32::from_rgb(0x48, 0x4A, 0x4C);
+    let amber = egui::Color32::from_rgb(0xE8, 0xA9, 0x3C);
+    let text = egui::Color32::from_rgb(0xE4, 0xE4, 0xE2);
+    let corner = egui::CornerRadius::same(4);
+
+    let mut visuals = egui::Visuals::dark();
+
+    visuals.panel_fill = panel;
+    visuals.window_fill = panel;
+    visuals.extreme_bg_color = recessed;
+    visuals.faint_bg_color = control_rest;
+    visuals.override_text_color = Some(text);
+    visuals.hyperlink_color = amber;
+    visuals.selection.bg_fill = amber.gamma_multiply(0.45);
+    visuals.selection.stroke.color = amber;
+    visuals.warn_fg_color = amber;
+
+    for widget in [
+        &mut visuals.widgets.noninteractive,
+        &mut visuals.widgets.inactive,
+        &mut visuals.widgets.hovered,
+        &mut visuals.widgets.active,
+        &mut visuals.widgets.open,
+    ] {
+        widget.corner_radius = corner;
+    }
+
+    visuals.widgets.noninteractive.bg_fill = panel;
+    visuals.widgets.noninteractive.weak_bg_fill = panel;
+
+    visuals.widgets.inactive.bg_fill = control_rest;
+    visuals.widgets.inactive.weak_bg_fill = control_rest;
+
+    visuals.widgets.hovered.bg_fill = control_hover;
+    visuals.widgets.hovered.weak_bg_fill = control_hover;
+    visuals.widgets.hovered.bg_stroke.color = amber;
+
+    visuals.widgets.active.bg_fill = amber;
+    visuals.widgets.active.weak_bg_fill = amber;
+    visuals.widgets.active.fg_stroke.color = recessed;
+
+    visuals.widgets.open.bg_fill = control_hover;
+    visuals.widgets.open.weak_bg_fill = control_hover;
+
+    visuals
+}
+
+/// Runs the actual BPM + key detection, catching any panic so a single
+/// malformed/unusual track can never kill the analysis thread out from
+/// under the app (mirrors the `catch_unwind` guard already used for decode
+/// in `worker.rs`).
+fn run_bpm_key_analysis(audio: &DecodedAudio) -> Result<(f32, String), String> {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        let bpm_result = detect_bpm(audio);
+        let key_result = detect_key(audio);
+        (bpm_result.bpm, key_result.key_name)
+    }));
+
+    result.map_err(|_| "BPM/key analysis panicked".to_string())
 }
 
 fn format_clock(secs: f64) -> String {

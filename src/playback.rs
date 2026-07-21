@@ -10,7 +10,7 @@ use crate::eq::{EqGains, LiveEq};
 
 #[derive(Debug)]
 enum PlaybackCommand {
-    Load(DecodedAudio),
+    Load(Arc<DecodedAudio>),
     Play,
     Pause,
     SeekFrame(u64),
@@ -131,30 +131,33 @@ impl PlaybackEngine {
                 err_fn,
                 None,
             )?,
-            SampleFormat::I16 => device.build_output_stream(
-                stream_config.clone(),
-                move |data: &mut [i16], _| {
-                    let mut temp = vec![0.0f32; data.len()];
-                    render_output_f32(&mut temp, &shared_cb, &status_cb);
-                    for (out, sample) in data.iter_mut().zip(temp) {
-                        *out = Sample::from_sample(sample);
-                    }
-                },
-                err_fn,
-                None,
-            )?,
-            SampleFormat::U16 => device.build_output_stream(
-                stream_config,
-                move |data: &mut [u16], _| {
-                    let mut temp = vec![0.0f32; data.len()];
-                    render_output_f32(&mut temp, &shared_cb, &status_cb);
-                    for (out, sample) in data.iter_mut().zip(temp) {
-                        *out = Sample::from_sample(sample);
-                    }
-                },
-                err_fn,
-                None,
-            )?,
+            // I16/U16 devices: cpal wants ints, but `render_output_f32` only
+            // knows how to fill `f32`. `scratch` is created once here, moved
+            // into the closure, and reused (resized, not reallocated) on
+            // every callback — the real-time audio thread must never
+            // allocate, and `vec![...]` inside the closure body would.
+            SampleFormat::I16 => {
+                let mut scratch: Vec<f32> = Vec::new();
+                device.build_output_stream(
+                    stream_config.clone(),
+                    move |data: &mut [i16], _| {
+                        fill_from_f32_scratch(data, &mut scratch, &shared_cb, &status_cb);
+                    },
+                    err_fn,
+                    None,
+                )?
+            }
+            SampleFormat::U16 => {
+                let mut scratch: Vec<f32> = Vec::new();
+                device.build_output_stream(
+                    stream_config,
+                    move |data: &mut [u16], _| {
+                        fill_from_f32_scratch(data, &mut scratch, &shared_cb, &status_cb);
+                    },
+                    err_fn,
+                    None,
+                )?
+            }
             other => anyhow::bail!("unsupported sample format: {other:?}"),
         };
 
@@ -199,7 +202,11 @@ impl PlaybackEngine {
         Arc::clone(&self.status)
     }
 
-    pub fn load(&self, audio: DecodedAudio) -> anyhow::Result<()> {
+    /// Queue a track for playback. `audio` is shared (`Arc`), not copied here —
+    /// the caller's `audio_cache` entry and this command both point at the
+    /// same decoded buffer. See `resolve_track_samples` for the one place a
+    /// real copy can still happen (resampling to the output device's rate).
+    pub fn load(&self, audio: Arc<DecodedAudio>) -> anyhow::Result<()> {
         self.cmd_tx.send(PlaybackCommand::Load(audio))?;
         Ok(())
     }
@@ -236,26 +243,14 @@ impl PlaybackEngine {
         match cmd {
             PlaybackCommand::Load(audio) => {
                 let start = std::time::Instant::now();
-                let mut audio = audio;
-                if audio.sample_rate != self.shared.output_sample_rate {
-                    dev::log(format!(
-                        "resampling {} -> {} Hz",
-                        audio.sample_rate, self.shared.output_sample_rate
-                    ));
-                    audio.samples = resample_interleaved(
-                        &audio.samples,
-                        audio.channels,
-                        audio.sample_rate,
-                        self.shared.output_sample_rate,
-                    );
-                    audio.sample_rate = self.shared.output_sample_rate;
-                }
 
                 let channels = audio.channels.max(1);
-                let duration_frames = (audio.samples.len() / channels) as u64;
+                let output_rate = self.shared.output_sample_rate;
+                let samples = self.resolve_track_samples(&audio, channels, output_rate);
+                let duration_frames = (samples.len() / channels) as u64;
 
                 let track = TrackBuffer {
-                    samples: Arc::from(audio.samples.into_boxed_slice()),
+                    samples,
                     channels,
                     duration_frames,
                 };
@@ -265,7 +260,7 @@ impl PlaybackEngine {
                     .store(duration_frames, Ordering::Relaxed);
                 self.shared
                     .sample_rate
-                    .store(audio.sample_rate as u64, Ordering::Relaxed);
+                    .store(output_rate as u64, Ordering::Relaxed);
                 self.shared.playhead_frame.store(0, Ordering::Relaxed);
                 self.shared.playing.store(false, Ordering::Relaxed);
                 self.reset_eq();
@@ -273,8 +268,7 @@ impl PlaybackEngine {
                 *self.shared.track.lock().expect("playback track lock") = Some(track);
 
                 dev::log(format!(
-                    "loaded track: {duration_frames} frames, {channels} ch @ {} Hz",
-                    audio.sample_rate
+                    "loaded track: {duration_frames} frames, {channels} ch @ {output_rate} Hz"
                 ));
                 dev::log_timing("playback load", start);
             }
@@ -315,6 +309,29 @@ impl PlaybackEngine {
         }
     }
 
+    /// Get samples at the output device's rate, sharing the decoded buffer
+    /// whenever possible instead of copying it.
+    ///
+    /// - Same rate as the output device (the common case): just bumps the
+    ///   `Arc`'s reference count — zero bytes copied, no matter how many
+    ///   times this track gets played, replayed, or autoplayed to next.
+    /// - Different rate: a real copy is unavoidable, since resampling
+    ///   produces new sample values, not just a reference to old ones.
+    fn resolve_track_samples(
+        &self,
+        audio: &DecodedAudio,
+        channels: usize,
+        output_rate: u32,
+    ) -> Arc<[f32]> {
+        if audio.sample_rate == output_rate {
+            return Arc::clone(&audio.samples);
+        }
+
+        dev::log(format!("resampling {} -> {output_rate} Hz", audio.sample_rate));
+        let resampled = resample_interleaved(&audio.samples, channels, audio.sample_rate, output_rate);
+        Arc::from(resampled)
+    }
+
     fn reset_eq(&self) {
         if let Ok(mut eqs) = self.shared.eq.lock() {
             for eq in eqs.iter_mut() {
@@ -330,6 +347,23 @@ fn read_gains(shared: &SharedPlayback) -> EqGains {
         low_mid: f32::from_bits(shared.eq_low_mid.load(Ordering::Relaxed)),
         hi_mid: f32::from_bits(shared.eq_hi_mid.load(Ordering::Relaxed)),
         hi: f32::from_bits(shared.eq_hi.load(Ordering::Relaxed)),
+    }
+}
+
+/// Renders into a reused `f32` scratch buffer, then converts sample-by-sample
+/// into the device's native integer format. `scratch` is caller-owned and
+/// reused across calls so this never allocates on the audio callback thread.
+fn fill_from_f32_scratch<S: Sample + cpal::FromSample<f32>>(
+    data: &mut [S],
+    scratch: &mut Vec<f32>,
+    shared: &SharedPlayback,
+    status: &PlaybackStatus,
+) {
+    scratch.clear();
+    scratch.resize(data.len(), 0.0);
+    render_output_f32(scratch, shared, status);
+    for (out, sample) in data.iter_mut().zip(scratch.iter()) {
+        *out = Sample::from_sample(*sample);
     }
 }
 

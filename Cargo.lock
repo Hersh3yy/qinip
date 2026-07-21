@@ -961,6 +961,7 @@ dependencies = [
  "eframe",
  "egui",
  "id3",
+ "image",
  "rfd",
  "ringbuf",
  "rustfft",
@@ -1827,6 +1828,8 @@ dependencies = [
  "num-traits",
  "png",
  "tiff",
+ "zune-core",
+ "zune-jpeg",
 ]
 
 [[package]]

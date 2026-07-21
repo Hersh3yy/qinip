@@ -28,10 +28,12 @@ pub struct TrackEntry {
     /// Cumulative seconds this track has actually been playing (across pauses).
     pub listened_secs: f64,
     pub played: bool,
+    /// Original append order — used to restore "no sort" view.
+    pub load_order: u32,
 }
 
 impl TrackEntry {
-    pub fn from_path(path: PathBuf) -> Self {
+    pub fn from_path(path: PathBuf, load_order: u32) -> Self {
         let meta = probe_metadata(&path);
         Self {
             path,
@@ -45,6 +47,7 @@ impl TrackEntry {
             analysis: AnalysisState::Pending,
             listened_secs: 0.0,
             played: false,
+            load_order,
         }
     }
 
@@ -140,11 +143,33 @@ impl TrackEntry {
 
 pub struct Playlist {
     pub tracks: Vec<TrackEntry>,
+    next_load_order: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum SortColumn {
+    TrackNumber,
+    Artist,
+    Title,
+    Duration,
+    Bpm,
+    Key,
+    Camelot,
+    Played,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SortDirection {
+    Asc,
+    Desc,
 }
 
 impl Playlist {
     pub fn new() -> Self {
-        Self { tracks: Vec::new() }
+        Self {
+            tracks: Vec::new(),
+            next_load_order: 0,
+        }
     }
 
     /// Append MP3s from a folder. Skips paths already in the playlist.
@@ -183,9 +208,26 @@ impl Playlist {
 
         paths.sort();
         let added = paths.len();
-        self.tracks
-            .extend(paths.into_iter().map(TrackEntry::from_path));
+        self.tracks.extend(paths.into_iter().map(|path| {
+            let order = self.next_load_order;
+            self.next_load_order += 1;
+            TrackEntry::from_path(path, order)
+        }));
         added
+    }
+
+    pub fn sort_by(&mut self, column: SortColumn, direction: SortDirection) {
+        self.tracks.sort_by(|a, b| {
+            let ord = compare_tracks(a, b, column);
+            match direction {
+                SortDirection::Asc => ord,
+                SortDirection::Desc => ord.reverse(),
+            }
+        });
+    }
+
+    pub fn restore_load_order(&mut self) {
+        self.tracks.sort_by_key(|t| t.load_order);
     }
 
     pub fn index_of(&self, path: &Path) -> Option<usize> {
@@ -198,6 +240,36 @@ impl Playlist {
         } else {
             None
         }
+    }
+}
+
+fn compare_tracks(a: &TrackEntry, b: &TrackEntry, column: SortColumn) -> std::cmp::Ordering {
+    use std::cmp::Ordering;
+
+    match column {
+        SortColumn::TrackNumber => a
+            .track_number
+            .unwrap_or(u32::MAX)
+            .cmp(&b.track_number.unwrap_or(u32::MAX)),
+        SortColumn::Artist => a.artist.to_lowercase().cmp(&b.artist.to_lowercase()),
+        SortColumn::Title => a.title.to_lowercase().cmp(&b.title.to_lowercase()),
+        SortColumn::Duration => a
+            .duration_secs
+            .unwrap_or(0.0)
+            .partial_cmp(&b.duration_secs.unwrap_or(0.0))
+            .unwrap_or(Ordering::Equal),
+        SortColumn::Bpm => a
+            .bpm
+            .unwrap_or(0.0)
+            .partial_cmp(&b.bpm.unwrap_or(0.0))
+            .unwrap_or(Ordering::Equal),
+        SortColumn::Key => a.key.as_deref().unwrap_or("").cmp(b.key.as_deref().unwrap_or("")),
+        SortColumn::Camelot => a
+            .camelot
+            .as_deref()
+            .unwrap_or("")
+            .cmp(b.camelot.as_deref().unwrap_or("")),
+        SortColumn::Played => a.played.cmp(&b.played),
     }
 }
 

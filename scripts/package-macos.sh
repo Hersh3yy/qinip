@@ -24,6 +24,20 @@ mkdir -p "$APP_DIR/Contents/Resources"
 
 cp target/release/dj_player "$APP_DIR/Contents/MacOS/DJ Player"
 
+ICON_SRC="$REPO_ROOT/assets/icon.png"
+ICONSET="$REPO_ROOT/target/icon.iconset"
+if [ -f "$ICON_SRC" ]; then
+  echo "==> Building AppIcon.icns..."
+  rm -rf "$ICONSET"
+  mkdir -p "$ICONSET"
+  for size in 16 32 128 256 512; do
+    sips -z "$size" "$size" "$ICON_SRC" --out "$ICONSET/icon_${size}x${size}.png" >/dev/null
+    double=$((size * 2))
+    sips -z "$double" "$double" "$ICON_SRC" --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null
+  done
+  iconutil -c icns "$ICONSET" -o "$APP_DIR/Contents/Resources/AppIcon.icns"
+fi
+
 cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -47,6 +61,8 @@ cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
     <string>1.0.0</string>
     <key>CFBundleVersion</key>
     <string>1.0.0</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
     <key>LSApplicationCategoryType</key>
     <string>public.app-category.music</string>
     <key>LSMinimumSystemVersion</key>
