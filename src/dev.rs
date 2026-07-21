@@ -5,9 +5,10 @@ static ENABLED: OnceLock<bool> = OnceLock::new();
 
 pub fn enabled() -> bool {
     *ENABLED.get_or_init(|| {
-        std::env::var("DJ_PLAYER_DEV")
-            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-            .unwrap_or(false)
+        let Ok(value) = std::env::var("QINIP_DEV").or_else(|_| std::env::var("DJ_PLAYER_DEV")) else {
+            return false;
+        };
+        value == "1" || value.eq_ignore_ascii_case("true")
     })
 }
 

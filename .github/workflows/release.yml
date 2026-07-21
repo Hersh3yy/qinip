@@ -25,14 +25,14 @@ jobs:
       - name: Zip .app
         run: |
           cd target/release/bundle/osx
-          ditto -c -k --sequesterRsrc --keepParent "DJ Player.app" ../../../dj-player-macos-arm64.zip
-          mv ../../../dj-player-macos-arm64.zip "$GITHUB_WORKSPACE/dj-player-macos-arm64.zip"
+          ditto -c -k --sequesterRsrc --keepParent "Qinip.app" ../../../qinip-macos-arm64.zip
+          mv ../../../qinip-macos-arm64.zip "$GITHUB_WORKSPACE/qinip-macos-arm64.zip"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: dj-player-macos-arm64
-          path: dj-player-macos-arm64.zip
+          name: qinip-macos-arm64
+          path: qinip-macos-arm64.zip
 
   windows:
     name: Windows exe
@@ -53,17 +53,17 @@ jobs:
         run: |
           cargo build --release --bin dj_player
           mkdir -p dist
-          cp target/release/dj_player.exe "dist/DJ Player.exe"
+          cp target/release/dj_player.exe "dist/Qinip.exe"
           cp USER_MANUAL.md dist/
           cp README.md dist/
           cd dist
-          7z a -tzip ../dj-player-windows-x64.zip *
+          7z a -tzip ../qinip-windows-x64.zip *
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: dj-player-windows-x64
-          path: dj-player-windows-x64.zip
+          name: qinip-windows-x64
+          path: qinip-windows-x64.zip
 
   publish:
     name: Publish GitHub Release
@@ -87,18 +87,19 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          name: DJ Player ${{ github.ref_name }}
+          name: Qinip ${{ github.ref_name }}
           draft: false
           generate_release_notes: true
           body: |
-            ## DJ Player ${{ github.ref_name }}
+            ## Qinip ${{ github.ref_name }}
 
-            MP3 pack audition player — playlist, waveform EQ, BPM/key analysis, autoplay.
+            MP3 pack audition player — playlist, waveform EQ, BPM/key analysis, gapless autoplay.
+            Named after the qinip fruit — a Clementine-shaped tool for the Apple Silicon era.
 
             ### Downloads
-            - **macOS (Apple Silicon):** `dj-player-macos-arm64.zip` — unzip, drag `DJ Player.app` to Applications.
-              If Gatekeeper blocks: `xattr -cr ~/Applications/DJ\ Player.app` then right-click → Open.
-            - **Windows (x64):** `dj-player-windows-x64.zip` — unzip and run `DJ Player.exe`.
+            - **macOS (Apple Silicon):** `qinip-macos-arm64.zip` — unzip, drag `Qinip.app` to Applications.
+              If Gatekeeper blocks: `xattr -cr ~/Applications/Qinip.app` then right-click → Open.
+            - **Windows (x64):** `qinip-windows-x64.zip` — unzip and run `Qinip.exe`.
 
             ### Notes
             - Ad-hoc / unsigned builds for local use (not notarized / not Authenticode-signed).

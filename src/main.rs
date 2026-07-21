@@ -1,12 +1,9 @@
-use dj_player::app::DjApp;
+use dj_player::app::QinipApp;
 
 fn main() -> eframe::Result<()> {
-    if std::env::var("DJ_PLAYER_DEV")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
-    {
-        eprintln!("DJ Player — dev mode (stderr logging enabled)");
-        eprintln!("Run with: DJ_PLAYER_DEV=1 cargo run --release");
+    if dj_player::dev::enabled() {
+        eprintln!("Qinip — dev mode (stderr logging enabled)");
+        eprintln!("Run with: QINIP_DEV=1 cargo run --release");
     }
 
     let icon = std::sync::Arc::new(dj_player::app::load_app_icon());
@@ -19,8 +16,8 @@ fn main() -> eframe::Result<()> {
     };
 
     eframe::run_native(
-        "DJ Player",
+        "Qinip",
         options,
-        Box::new(|cc| Ok(Box::new(DjApp::new(cc)))),
+        Box::new(|cc| Ok(Box::new(QinipApp::new(cc)))),
     )
 }

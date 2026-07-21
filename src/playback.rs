@@ -11,6 +11,8 @@ use crate::eq::{EqGains, LiveEq};
 #[derive(Debug)]
 enum PlaybackCommand {
     Load(Arc<DecodedAudio>),
+    QueueNext(Arc<DecodedAudio>),
+    ClearNext,
     Play,
     Pause,
     SeekFrame(u64),
@@ -50,6 +52,9 @@ struct TrackBuffer {
 
 struct SharedPlayback {
     track: Mutex<Option<TrackBuffer>>,
+    /// Preloaded next track for gapless autoplay — swapped in by the audio callback.
+    next_track: Mutex<Option<TrackBuffer>>,
+    auto_advanced: AtomicBool,
     /// One LiveEq per output channel.
     eq: Mutex<Vec<LiveEq>>,
     playhead_frame: AtomicU64,
@@ -97,6 +102,8 @@ impl PlaybackEngine {
         let unity = EqGains::default();
         let shared = Arc::new(SharedPlayback {
             track: Mutex::new(None),
+            next_track: Mutex::new(None),
+            auto_advanced: AtomicBool::new(false),
             eq: Mutex::new(eq_channels),
             playhead_frame: AtomicU64::new(0),
             duration_frames: AtomicU64::new(0),
@@ -207,8 +214,22 @@ impl PlaybackEngine {
     /// same decoded buffer. See `resolve_track_samples` for the one place a
     /// real copy can still happen (resampling to the output device's rate).
     pub fn load(&self, audio: Arc<DecodedAudio>) -> anyhow::Result<()> {
+        self.cmd_tx.send(PlaybackCommand::ClearNext)?;
         self.cmd_tx.send(PlaybackCommand::Load(audio))?;
         Ok(())
+    }
+
+    /// Stage the next track so the audio callback can swap to it with no gap.
+    pub fn queue_next(&self, audio: Arc<DecodedAudio>) -> anyhow::Result<()> {
+        self.cmd_tx.send(PlaybackCommand::QueueNext(audio))?;
+        Ok(())
+    }
+
+    /// `true` once after the audio thread auto-swapped to a queued track.
+    pub fn take_auto_advanced(&self) -> bool {
+        self.shared
+            .auto_advanced
+            .swap(false, Ordering::Relaxed)
     }
 
     pub fn play(&self) -> anyhow::Result<()> {
@@ -263,6 +284,8 @@ impl PlaybackEngine {
                     .store(output_rate as u64, Ordering::Relaxed);
                 self.shared.playhead_frame.store(0, Ordering::Relaxed);
                 self.shared.playing.store(false, Ordering::Relaxed);
+                self.shared.auto_advanced.store(false, Ordering::Relaxed);
+                self.clear_queued_next();
                 self.reset_eq();
 
                 *self.shared.track.lock().expect("playback track lock") = Some(track);
@@ -271,6 +294,22 @@ impl PlaybackEngine {
                     "loaded track: {duration_frames} frames, {channels} ch @ {output_rate} Hz"
                 ));
                 dev::log_timing("playback load", start);
+            }
+            PlaybackCommand::QueueNext(audio) => {
+                let channels = audio.channels.max(1);
+                let output_rate = self.shared.output_sample_rate;
+                let samples = self.resolve_track_samples(&audio, channels, output_rate);
+                let duration_frames = (samples.len() / channels) as u64;
+                let next = TrackBuffer {
+                    samples,
+                    channels,
+                    duration_frames,
+                };
+                *self.shared.next_track.lock().expect("next track lock") = Some(next);
+                dev::log(format!("queued next: {duration_frames} frames"));
+            }
+            PlaybackCommand::ClearNext => {
+                self.clear_queued_next();
             }
             PlaybackCommand::Play => {
                 self.shared.playing.store(true, Ordering::Relaxed);
@@ -332,6 +371,10 @@ impl PlaybackEngine {
         Arc::from(resampled)
     }
 
+    fn clear_queued_next(&self) {
+        *self.shared.next_track.lock().expect("next track lock") = None;
+    }
+
     fn reset_eq(&self) {
         if let Ok(mut eqs) = self.shared.eq.lock() {
             for eq in eqs.iter_mut() {
@@ -375,40 +418,35 @@ fn render_output_f32(data: &mut [f32], shared: &SharedPlayback, status: &Playbac
         *sample = 0.0;
     }
 
-    let playing = shared.playing.load(Ordering::Relaxed);
-    if !playing || out_frames == 0 {
+    if !shared.playing.load(Ordering::Relaxed) || out_frames == 0 {
         return;
     }
-
-    let track = match shared.track.try_lock() {
-        Ok(guard) => guard.as_ref().map(|t| {
-            (
-                Arc::clone(&t.samples),
-                t.channels,
-                t.duration_frames,
-            )
-        }),
-        Err(_) => return,
-    };
-
-    let Some((samples, src_channels, duration_frames)) = track else {
-        return;
-    };
 
     let Ok(mut eqs) = shared.eq.try_lock() else {
         return;
     };
 
-    let src_channels = src_channels.max(1);
     let volume = f32::from_bits(shared.volume.load(Ordering::Relaxed));
     let gains = read_gains(shared);
-    let mut frame = shared.playhead_frame.load(Ordering::Relaxed);
-    let mut rendered_frames = 0u64;
+    let mut out_frame = 0usize;
 
-    for out_frame in 0..out_frames {
-        if frame >= duration_frames {
+    while out_frame < out_frames {
+        let Some((samples, src_channels, duration_frames)) = read_current_track(shared) else {
             shared.playing.store(false, Ordering::Relaxed);
-            break;
+            status.playing.store(false, Ordering::Relaxed);
+            return;
+        };
+
+        let src_channels = src_channels.max(1);
+        let mut frame = shared.playhead_frame.load(Ordering::Relaxed);
+
+        if frame >= duration_frames && duration_frames > 0 {
+            if try_swap_to_queued_track(shared, &mut eqs, status) {
+                continue;
+            }
+            shared.playing.store(false, Ordering::Relaxed);
+            status.playing.store(false, Ordering::Relaxed);
+            return;
         }
 
         let base = frame as usize * src_channels;
@@ -422,18 +460,62 @@ fn render_output_f32(data: &mut [f32], shared: &SharedPlayback, status: &Playbac
         }
 
         frame += 1;
-        rendered_frames += 1;
-    }
-
-    if rendered_frames > 0 {
+        out_frame += 1;
         shared.playhead_frame.store(frame, Ordering::Relaxed);
         status.playhead_frame.store(frame, Ordering::Relaxed);
+
+        if frame >= duration_frames && duration_frames > 0 {
+            if try_swap_to_queued_track(shared, &mut eqs, status) {
+                continue;
+            }
+            shared.playing.store(false, Ordering::Relaxed);
+            status.playing.store(false, Ordering::Relaxed);
+            return;
+        }
+    }
+}
+
+fn read_current_track(shared: &SharedPlayback) -> Option<(Arc<[f32]>, usize, u64)> {
+    let guard = shared.track.try_lock().ok()?;
+    guard.as_ref().map(|t| {
+        (
+            Arc::clone(&t.samples),
+            t.channels,
+            t.duration_frames,
+        )
+    })
+}
+
+/// Swap the preloaded `next_track` into `track` at end-of-song — keeps `playing` true.
+fn try_swap_to_queued_track(
+    shared: &SharedPlayback,
+    eqs: &mut [LiveEq],
+    status: &PlaybackStatus,
+) -> bool {
+    let Ok(mut next_guard) = shared.next_track.try_lock() else {
+        return false;
+    };
+    let Some(next) = next_guard.take() else {
+        return false;
+    };
+    let Ok(mut track_guard) = shared.track.try_lock() else {
+        *next_guard = Some(next);
+        return false;
+    };
+
+    let duration_frames = next.duration_frames;
+    *track_guard = Some(next);
+    shared.playhead_frame.store(0, Ordering::Relaxed);
+    shared.duration_frames.store(duration_frames, Ordering::Relaxed);
+    status.playhead_frame.store(0, Ordering::Relaxed);
+    status.duration_frames.store(duration_frames, Ordering::Relaxed);
+    shared.auto_advanced.store(true, Ordering::Relaxed);
+
+    for eq in eqs.iter_mut() {
+        eq.reset(shared.output_sample_rate);
     }
 
-    if frame >= duration_frames && duration_frames > 0 {
-        shared.playing.store(false, Ordering::Relaxed);
-        status.playing.store(false, Ordering::Relaxed);
-    }
+    true
 }
 
 fn resample_interleaved(

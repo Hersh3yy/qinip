@@ -1,8 +1,26 @@
-# DJ Player — Developer / LLM README
+# Qinip — Developer / LLM README
 
 Rust desktop MP3 audition tool (egui + cpal + symphonia + aubio).  
-**Current release: v1.0.0** (single-deck player + analysis + file ops + installables).  
+**Current release: v1.0.0** — playlist, waveform EQ, BPM/key analysis, gapless autoplay, Mac + Windows builds.  
 End-user docs: [`USER_MANUAL.md`](./USER_MANUAL.md).
+
+---
+
+## Why Qinip?
+
+<p align="center">
+  <img src="assets/qinip-fruit-readme.png" alt="A bunch of qinip fruit — green shells cracked open to show the orange pulp inside" width="320">
+</p>
+
+**Qinip** is how I say *guinep* — the small Caribbean fruit that grows in bunches. You crack one open to see the juicy bit inside.
+
+Same idea here: load a bunch of songs, crack one open, see the waveform inside. I built it because **Clementine** died on Apple Silicon and **Strawberry** wants €10/month. This one's free.
+
+---
+
+## Support
+
+Qinip is free — download, use, share. If it saves you time or money, tips are welcome (add your Ko-fi / GitHub Sponsors link on the repo when ready).
 
 ---
 
@@ -10,7 +28,7 @@ End-user docs: [`USER_MANUAL.md`](./USER_MANUAL.md).
 
 ```bash
 cargo run --release                 # GUI (default binary: dj_player)
-DJ_PLAYER_DEV=1 cargo run --release # stderr [dev] logs
+QINIP_DEV=1 cargo run --release     # stderr [dev] logs (DJ_PLAYER_DEV also works)
 cargo run --release --bin analyze   # terminal analysis demo (single hardcoded path)
 cargo build --release
 cargo test
@@ -33,8 +51,8 @@ git push origin v1.0.0
 
 | Asset | Platform |
 |-------|----------|
-| `dj-player-macos-arm64.zip` | macOS Apple Silicon `.app` |
-| `dj-player-windows-x64.zip` | Windows x64 portable `.exe` |
+| `qinip-macos-arm64.zip` | macOS Apple Silicon `Qinip.app` |
+| `qinip-windows-x64.zip` | Windows x64 portable `Qinip.exe` |
 
 Workflow: [`.github/workflows/release.yml`](.github/workflows/release.yml).
 
@@ -45,17 +63,17 @@ Builds are **unsigned / ad-hoc** (not Apple-notarized, not Windows Authenticode)
 ## Local packaging
 
 ```bash
-# macOS → target/release/bundle/osx/DJ Player.app
+# macOS → target/release/bundle/osx/Qinip.app
 bash scripts/package-macos.sh
 
-# Windows (run on Windows / CI) → target/release/dj-player-windows-x64.zip
+# Windows (run on Windows / CI) → target/release/qinip-windows-x64.zip
 bash scripts/package-windows.sh
 ```
 
 macOS first-launch unblock:
 
 ```bash
-xattr -cr ~/Applications/DJ\ Player.app
+xattr -cr ~/Applications/Qinip.app
 ```
 
 ---
@@ -106,7 +124,7 @@ cpal audio callback
 | File | Responsibility |
 |------|----------------|
 | `src/main.rs` | `eframe::run_native` |
-| `src/app.rs` | UI, playlist interaction, EQ knobs, waveform, autoplay, context menu |
+| `src/app.rs` | `QinipApp` UI, playlist, EQ knobs, waveform, autoplay, context menu |
 | `src/playlist.rs` | Scan/append MP3s, `TrackEntry`, Camelot via key helper |
 | `src/decode.rs` | Symphonia decode + ID3 probe (title/artist/track#) |
 | `src/tags.rs` | Write BPM (`TBPM`) + key (`TKEY`) ID3v2 frames |
@@ -118,7 +136,7 @@ cpal audio callback
 | `src/key.rs` | Chroma / Krumhansl-style key + `to_camelot` |
 | `src/bands.rs` | Offline band filter helpers (ASCII / analysis) |
 | `src/waveform.rs` | Mono peak helpers |
-| `src/dev.rs` | `DJ_PLAYER_DEV` logging |
+| `src/dev.rs` | `QINIP_DEV` logging |
 | `src/bin/analyze.rs` | Headless analysis smoke test |
 
 ---

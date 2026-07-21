@@ -65,7 +65,7 @@ impl PlaylistColumns {
     }
 }
 
-pub struct DjApp {
+pub struct QinipApp {
     playlist: Playlist,
     playback: PlaybackEngine,
     worker: AnalysisWorker,
@@ -87,12 +87,14 @@ pub struct DjApp {
     confirm_delete: Option<usize>,
     playlist_sort: Option<(SortColumn, SortDirection)>,
     playlist_columns: PlaylistColumns,
+    /// True once we've queued the upcoming track for gapless autoplay.
+    autoplay_preloaded: bool,
 }
 
-impl DjApp {
+impl QinipApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         if dev::enabled() {
-            eprintln!("[dev] DJ_PLAYER_DEV enabled — logging to stderr");
+            eprintln!("[dev] QINIP_DEV enabled — logging to stderr");
             eprintln!("[dev] tip: use `cargo run --release` for ~18x faster analysis");
         }
 
@@ -123,6 +125,7 @@ impl DjApp {
             confirm_delete: None,
             playlist_sort: None,
             playlist_columns: PlaylistColumns::default(),
+            autoplay_preloaded: false,
         }
     }
 
@@ -333,6 +336,7 @@ impl DjApp {
         self.playing_track = Some(index);
         self.selected = Some(index);
         self.last_listen_at = None;
+        self.autoplay_preloaded = false;
         self.was_playing = self
             .playlist
             .tracks
@@ -430,22 +434,12 @@ impl DjApp {
             .and_then(|path| self.playlist.index_of(path));
     }
 
-    fn reveal_track_in_file_manager(&mut self, index: usize) {
+    fn open_track_folder(&mut self, index: usize) {
         let Some(track) = self.playlist.tracks.get(index) else {
             return;
         };
-        match file_ops::reveal_in_file_manager(&track.path) {
-            Ok(()) => self.status_message = format!("Revealed {}", track.filename_label()),
-            Err(err) => self.status_message = err,
-        }
-    }
-
-    fn show_track_folder(&mut self, index: usize) {
-        let Some(track) = self.playlist.tracks.get(index) else {
-            return;
-        };
-        match file_ops::show_enclosing_folder(&track.path) {
-            Ok(()) => self.status_message = "Opened enclosing folder.".to_string(),
+        match file_ops::open_enclosing_folder(&track.path) {
+            Ok(()) => self.status_message = format!("Opened {}", track.filename_label()),
             Err(err) => self.status_message = err,
         }
     }
@@ -647,19 +641,81 @@ impl DjApp {
         self.last_listen_at = Some(now);
     }
 
-    fn maybe_autoplay_next(&mut self) {
+    fn maybe_autoplay_next(&mut self) -> bool {
+        if self.playback.take_auto_advanced() {
+            self.on_auto_advanced_to_next();
+            return true;
+        }
+
         let status = self.playback.status();
         let playing = status.is_playing();
         let duration = status.duration_secs();
         let position = status.position_secs();
-        let near_end = duration > 0.5 && position >= duration - 0.08;
+        let near_end = duration > 0.5 && position >= duration - 0.35;
 
-        // Only chain to next track if this one was actually listened to (≥20s).
-        if self.was_playing && !playing && near_end && self.autoplay {
+        if self.was_playing && self.autoplay && near_end && playing {
+            self.preload_upcoming_track();
+        }
+
+        // Fallback when the next track wasn't preloaded (e.g. not decoded yet).
+        let at_end = duration > 0.5 && position >= duration - 0.08;
+        if self.was_playing && !playing && at_end && self.autoplay {
             self.was_playing = false;
             self.last_listen_at = None;
+            self.autoplay_preloaded = false;
             self.play_next();
+            return true;
         }
+
+        false
+    }
+
+    /// Stage the next playlist track in the playback engine before the current one ends.
+    fn preload_upcoming_track(&mut self) {
+        if self.autoplay_preloaded || !self.autoplay {
+            return;
+        }
+        let Some(current) = self.playing_track else {
+            return;
+        };
+        let next = current + 1;
+        if next >= self.playlist.tracks.len() {
+            return;
+        }
+        let path = self.playlist.tracks[next].path.clone();
+        let Some(audio) = self.audio_cache.get(&path).map(Arc::clone) else {
+            return;
+        };
+        if self.playback.queue_next(audio).is_ok() {
+            self.autoplay_preloaded = true;
+            dev::log(format!("preloaded next track #{next} for gapless autoplay"));
+        }
+    }
+
+    /// Audio thread already swapped to the queued track — update UI state to match.
+    fn on_auto_advanced_to_next(&mut self) {
+        let Some(current) = self.playing_track else {
+            return;
+        };
+        let next = current + 1;
+        if next >= self.playlist.tracks.len() {
+            return;
+        }
+
+        self.playing_track = Some(next);
+        self.selected = Some(next);
+        self.last_listen_at = None;
+        self.autoplay_preloaded = false;
+        self.was_playing = self
+            .playlist
+            .tracks
+            .get(next)
+            .is_some_and(|t| t.qualifies_as_played());
+        self.status_message = format!(
+            "Playing {}",
+            self.playlist.tracks[next].display_label()
+        );
+        dev::log(format!("gapless autoplay → #{next}"));
     }
 
     fn seek_from_waveform_click(&mut self, fraction: f64) {
@@ -933,7 +989,7 @@ impl DjApp {
     }
 }
 
-impl eframe::App for DjApp {
+impl eframe::App for QinipApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.playback.poll();
         self.poll_worker();
@@ -942,12 +998,20 @@ impl eframe::App for DjApp {
 
         let now = ctx.input(|i| i.time);
         self.accumulate_listen_time(now);
-        self.maybe_autoplay_next();
+        if self.maybe_autoplay_next() {
+            // Apply Load/Play (or detect gapless swap) in the same frame — avoids a
+            // visible pause between autoplay commands and the audio thread.
+            self.playback.poll();
+            ctx.request_repaint();
+        }
 
         let status = self.playback.status();
         if status.is_playing() {
             self.seek_slider = status.position_secs();
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        } else if self.autoplay && self.playing_track.is_some() {
+            // Keep polling near track boundaries so gapless preload/swap is timely.
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
         } else if self.playlist.tracks.iter().any(|t| {
             matches!(
                 t.analysis,
@@ -1088,8 +1152,7 @@ impl eframe::App for DjApp {
             let mut pending_delete = None;
             let mut pending_move = None;
             let mut pending_tags = None;
-            let mut pending_reveal = None;
-            let mut pending_show_folder = None;
+            let mut pending_open_folder = None;
             let mut pending_sort: Option<SortColumn> = None;
 
             let avail = ui.available_width();
@@ -1229,12 +1292,8 @@ impl eframe::App for DjApp {
                                         ui.close();
                                     }
                                     ui.separator();
-                                    if ui.button(file_ops::reveal_menu_label()).clicked() {
-                                        pending_reveal = Some(index);
-                                        ui.close();
-                                    }
-                                    if ui.button("Show enclosing folder").clicked() {
-                                        pending_show_folder = Some(index);
+                                    if ui.button("Open enclosing folder").clicked() {
+                                        pending_open_folder = Some(index);
                                         ui.close();
                                     }
                                     ui.separator();
@@ -1322,11 +1381,8 @@ impl eframe::App for DjApp {
             if let Some(index) = pending_tags {
                 self.write_tags_for(index);
             }
-            if let Some(index) = pending_reveal {
-                self.reveal_track_in_file_manager(index);
-            }
-            if let Some(index) = pending_show_folder {
-                self.show_track_folder(index);
+            if let Some(index) = pending_open_folder {
+                self.open_track_folder(index);
             }
         });
     }

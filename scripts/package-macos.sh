@@ -1,17 +1,17 @@
 #!/usr/bin/env bash
-# Build a macOS .app bundle for DJ Player.
+# Build a macOS .app bundle for Qinip.
 #
 # Usage:
 #   ./scripts/package-macos.sh
 #
 # Output:
-#   target/release/bundle/osx/DJ Player.app
+#   target/release/bundle/osx/Qinip.app
 
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
-APP_DIR="$REPO_ROOT/target/release/bundle/osx/DJ Player.app"
+APP_DIR="$REPO_ROOT/target/release/bundle/osx/Qinip.app"
 
 cd "$REPO_ROOT"
 
@@ -22,7 +22,7 @@ echo "==> Assembling .app bundle..."
 mkdir -p "$APP_DIR/Contents/MacOS"
 mkdir -p "$APP_DIR/Contents/Resources"
 
-cp target/release/dj_player "$APP_DIR/Contents/MacOS/DJ Player"
+cp target/release/dj_player "$APP_DIR/Contents/MacOS/Qinip"
 
 ICON_SRC="$REPO_ROOT/assets/icon.png"
 ICONSET="$REPO_ROOT/target/icon.iconset"
@@ -46,15 +46,15 @@ cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
     <key>CFBundleDevelopmentRegion</key>
     <string>en</string>
     <key>CFBundleDisplayName</key>
-    <string>DJ Player</string>
+    <string>Qinip</string>
     <key>CFBundleExecutable</key>
-    <string>DJ Player</string>
+    <string>Qinip</string>
     <key>CFBundleIdentifier</key>
-    <string>com.hirenbudhrani.dj-player</string>
+    <string>com.hirenbudhrani.qinip</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
-    <string>DJ Player</string>
+    <string>Qinip</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>

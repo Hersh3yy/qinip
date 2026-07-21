@@ -1,6 +1,8 @@
-# DJ Player — User Manual (v1.0.0)
+# Qinip — User Manual (v1.0.0)
 
 A desktop MP3 player for auditioning packs: playlist, waveform, EQ, BPM/key analysis, and file housekeeping.
+
+Named after the **qinip** fruit from Sint Maarten — crack open a folder, taste the tracks, keep the sweet ones.
 
 ---
 
@@ -12,13 +14,13 @@ Download the zip for your OS from the project's **Releases** page:
 
 | File | What to do |
 |------|------------|
-| `dj-player-macos-arm64.zip` | Unzip → drag `DJ Player.app` to Applications |
-| `dj-player-windows-x64.zip` | Unzip → run `DJ Player.exe` |
+| `qinip-macos-arm64.zip` | Unzip → drag `Qinip.app` to Applications |
+| `qinip-windows-x64.zip` | Unzip → run `Qinip.exe` |
 
 **macOS Gatekeeper:** if macOS blocks the app on first launch:
 
 ```bash
-xattr -cr ~/Applications/DJ\ Player.app
+xattr -cr ~/Applications/Qinip.app
 ```
 
 Then right-click → Open → Open.
@@ -36,11 +38,11 @@ cargo run --release
 ```bash
 # macOS
 bash scripts/package-macos.sh
-# → target/release/bundle/osx/DJ Player.app
+# → target/release/bundle/osx/Qinip.app
 
 # Windows (on a Windows machine)
 bash scripts/package-windows.sh
-# → target/release/dj-player-windows-x64.zip
+# → target/release/qinip-windows-x64.zip
 ```
 
 ---
@@ -50,8 +52,8 @@ bash scripts/package-windows.sh
 1. Click **Load Folder** (or drag a folder / MP3s onto the window).
 2. Wait for the **Title** bar to fill (decode → analyze). BPM / Key / Camelot appear when done.
 3. **Double-click** a track (or select it and press **Enter**) to play.
-4. Use the **waveform** to seek; use **EQ knobs** to shape the sound.
-5. With **Autoplay** on, the next track starts after the current one ends (if you listened long enough — see below).
+4. Use the **waveform** to seek; use **EQ knobs** and **Transport** buttons beside them.
+5. With **Autoplay** on, the next track starts with minimal gap (if you listened long enough — see below).
 6. **Right-click** a track title for file actions (move, write tags, delete).
 
 ---
@@ -65,6 +67,8 @@ bash scripts/package-windows.sh
 | **Backspace** (Mac) / **Delete** | Remove from playlist only — **never deletes the file** |
 | **Load Folder** / drop files | **Adds** to the existing list (skips duplicates) |
 | **Right-click** title | Context menu (see below) |
+| **Column header click** | Sort asc → desc → off (click again to cycle) |
+| **Drag column header edge** | Resize column |
 
 ### Right-click menu
 
@@ -72,6 +76,7 @@ bash scripts/package-windows.sh
 |--------|--------|
 | **Play** | Start the track |
 | **Remove from playlist** | Drop from the list only (file stays on disk) |
+| **Open enclosing folder** | Opens the folder containing the file in Finder / Explorer |
 | **Move to folder…** | Pick a destination folder; moves the MP3 on disk and updates the playlist path |
 | **Write BPM/Key tags** | Writes analysis into the file's ID3 tags (`TBPM`, `TKEY`) — requires analysis to be finished |
 | **Delete from disk…** | Permanently deletes the MP3 after a confirm dialog — **cannot be undone** |
@@ -95,10 +100,10 @@ Hover the title to see the original filename.
 
 ## Transport
 
-- **Play/Pause** — top bar (also resumes the current deck track).
+- **Transport buttons** — beside the EQ knobs: Previous · Play/Pause · Next · Stop · ±10s seek.
 - **Seek bar** — bottom; drag to jump in time.
 - **Vol** — master volume.
-- **Autoplay** — when on, plays the next playlist row after the current track finishes, but only if that track was "played" (≥ 20s listened).
+- **Autoplay** — when on, plays the next playlist row after the current track finishes (gapless when the next file is already decoded), but only if that track was "played" (≥ 20s listened).
 
 ---
 
@@ -110,8 +115,18 @@ Hover the title to see the original filename.
 - **EQ knobs** (0%–200%, default 100%):
   - Change what you hear **and** how visible that color is on the waveform.
   - All knobs at **0%** → silence.
-  - Double-click a knob → reset that band to 100%.
+  - Double-click or **right-click** a knob → reset that band to 100%.
   - **Reset EQ** → all bands to 100%.
+
+---
+
+## Write BPM/Key tags — where to verify
+
+Qinip writes `TBPM` and `TKEY` into the MP3 file. **macOS Finder Get Info does not show these fields.**
+
+To verify a write worked:
+- Use **Mp3tag**, **Rekordbox**, or **Serato**
+- Or terminal: `id3info yourtrack.mp3 | grep -E 'TBPM|TKEY'`
 
 ---
 
@@ -132,3 +147,9 @@ Hover the title to see the original filename.
 - Rekordbox export
 
 These are deferred to later versions.
+
+---
+
+## Support
+
+Qinip is free. If it's useful, consider leaving a tip — see the project README for links.
