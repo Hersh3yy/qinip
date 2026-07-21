@@ -1,0 +1,108 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  macos:
+    name: macOS .app
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build .app
+        run: bash scripts/package-macos.sh
+
+      - name: Zip .app
+        run: |
+          cd target/release/bundle/osx
+          ditto -c -k --sequesterRsrc --keepParent "DJ Player.app" ../../../dj-player-macos-arm64.zip
+          mv ../../../dj-player-macos-arm64.zip "$GITHUB_WORKSPACE/dj-player-macos-arm64.zip"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dj-player-macos-arm64
+          path: dj-player-macos-arm64.zip
+
+  windows:
+    name: Windows exe
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install LLVM (aubio bindgen)
+        run: choco install llvm -y
+
+      - name: Build release
+        shell: bash
+        env:
+          LIBCLANG_PATH: C:\Program Files\LLVM\bin
+        run: |
+          cargo build --release --bin dj_player
+          mkdir -p dist
+          cp target/release/dj_player.exe "dist/DJ Player.exe"
+          cp USER_MANUAL.md dist/
+          cp README.md dist/
+          cd dist
+          7z a -tzip ../dj-player-windows-x64.zip *
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dj-player-windows-x64
+          path: dj-player-windows-x64.zip
+
+  publish:
+    name: Publish GitHub Release
+    needs: [macos, windows]
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Flatten artifacts
+        run: |
+          mkdir -p release-assets
+          find artifacts -type f \( -name '*.zip' \) -exec cp {} release-assets/ \;
+          ls -la release-assets
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: DJ Player ${{ github.ref_name }}
+          draft: false
+          generate_release_notes: true
+          body: |
+            ## DJ Player ${{ github.ref_name }}
+
+            MP3 pack audition player — playlist, waveform EQ, BPM/key analysis, autoplay.
+
+            ### Downloads
+            - **macOS (Apple Silicon):** `dj-player-macos-arm64.zip` — unzip, drag `DJ Player.app` to Applications.
+              If Gatekeeper blocks: `xattr -cr ~/Applications/DJ\ Player.app` then right-click → Open.
+            - **Windows (x64):** `dj-player-windows-x64.zip` — unzip and run `DJ Player.exe`.
+
+            ### Notes
+            - Ad-hoc / unsigned builds for local use (not notarized / not Authenticode-signed).
+            - See `USER_MANUAL.md` inside the archives.
+          files: release-assets/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

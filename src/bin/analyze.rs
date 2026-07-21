@@ -6,7 +6,7 @@ use dj_player::waveform::{print_ascii_waveform, waveform_peaks};
 
 fn main() {
     let path = "test_audio_files/ZHU - Cocaine Model (Original Mix).mp3";
-    let audio = decode_to_samples(path);
+    let audio = decode_to_samples(path).expect("decode failed");
 
     println!("Total samples: {}", audio.samples.len());
     println!(

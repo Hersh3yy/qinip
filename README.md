@@ -1,7 +1,7 @@
 # DJ Player — Developer / LLM README
 
 Rust desktop MP3 audition tool (egui + cpal + symphonia + aubio).  
-**Current ship target: v1** (single-deck player + analysis).  
+**Current release: v1.0.0** (single-deck player + analysis + file ops + installables).  
 End-user docs: [`USER_MANUAL.md`](./USER_MANUAL.md).
 
 ---
@@ -22,11 +22,50 @@ Apple Silicon aubio: use crate features `bindgen` + `builtin` (bundled C). Do no
 
 ---
 
+## Releases (GitHub)
+
+Push a version tag to trigger CI builds and publish a GitHub Release with assets:
+
+```bash
+git tag v1.0.0
+git push origin v1.0.0
+```
+
+| Asset | Platform |
+|-------|----------|
+| `dj-player-macos-arm64.zip` | macOS Apple Silicon `.app` |
+| `dj-player-windows-x64.zip` | Windows x64 portable `.exe` |
+
+Workflow: [`.github/workflows/release.yml`](.github/workflows/release.yml).
+
+Builds are **unsigned / ad-hoc** (not Apple-notarized, not Windows Authenticode). Fine for sharing with people who trust you; Gatekeeper / SmartScreen may warn.
+
+---
+
+## Local packaging
+
+```bash
+# macOS → target/release/bundle/osx/DJ Player.app
+bash scripts/package-macos.sh
+
+# Windows (run on Windows / CI) → target/release/dj-player-windows-x64.zip
+bash scripts/package-windows.sh
+```
+
+macOS first-launch unblock:
+
+```bash
+xattr -cr ~/Applications/DJ\ Player.app
+```
+
+---
+
 ## Architecture (v1)
 
 ```
 UI thread (eframe App::logic / App::ui)
   ├── playlist state, EQ gains, selection, autoplay
+  ├── right-click: remove / move / write tags / delete from disk
   ├── polls worker + analysis channels
   └── PlaybackEngine::poll() applies Load/Play/Seek/EQ commands
 
@@ -58,6 +97,7 @@ cpal audio callback
 6. **`played` / autoplay chain**: accumulate `listened_secs` while cpal is playing; threshold **20s** (`TrackEntry::PLAYED_THRESHOLD_SECS`).
 7. **Playlist load appends**; never wipe on second folder load.
 8. **Click = select**, **double-click / Enter = play**, **Backspace/Delete = remove from list only**.
+9. **Destructive file ops** (delete/move) go through confirm / folder picker — never via Backspace alone.
 
 ---
 
@@ -66,9 +106,10 @@ cpal audio callback
 | File | Responsibility |
 |------|----------------|
 | `src/main.rs` | `eframe::run_native` |
-| `src/app.rs` | UI, playlist interaction, EQ knobs, waveform draw, autoplay |
+| `src/app.rs` | UI, playlist interaction, EQ knobs, waveform, autoplay, context menu |
 | `src/playlist.rs` | Scan/append MP3s, `TrackEntry`, Camelot via key helper |
 | `src/decode.rs` | Symphonia decode + ID3 probe (title/artist/track#) |
+| `src/tags.rs` | Write BPM (`TBPM`) + key (`TKEY`) ID3v2 frames |
 | `src/playback.rs` | cpal output, seek, volume, live EQ |
 | `src/eq.rs` | `EqGains`, `LiveEq`, `band_waveform_peaks`, band colors |
 | `src/knob.rs` | Circular EQ knob widget |
@@ -86,7 +127,8 @@ cpal audio callback
 
 - **GUI:** egui / eframe **0.35** — `App::logic` + `App::ui` (not old `update`-only). Panels: `egui::Panel::{top,bottom}`, `CentralPanel::show(ui, …)`.
 - **Audio I/O:** cpal 0.18  
-- **Decode:** symphonia (`mp3`)  
+- **Decode:** symphonia (`mp3`); returns `Result` — malformed packets are skipped, not panicked  
+- **Tags:** `id3` crate for write-back of BPM/key  
 - **DSP:** biquad; BPM via `aubio-rs`  
 - **Key:** rustfft chroma (libKeyFinder still planned, not integrated)
 
@@ -99,7 +141,6 @@ cpal audio callback
 - Verify crate APIs against installed versions before inventing methods.
 - Prefer FFI to proven DSP libs for BPM/key over greenfield algorithms (product decision).
 - Do not commit unless asked.
-- Persona/voice: Zazu (formal, slightly panicky) per project rules — keep docs themselves plain.
 
 ---
 
@@ -107,9 +148,10 @@ cpal audio callback
 
 - Single deck / one playing buffer.
 - No tempo/pitch control.
-- No persistence / tag write-back.
+- Tag write-back is BPM + Key only (not Camelot / custom fields).
 - Band EQ uses overlapping filters; unity uses dry passthrough to avoid coloration.
-- Short tracks (&lt;20s) never get `played` ✓ and won’t chain autoplay under current rule.
+- Short tracks (<20s) never get `played` ✓ and won't chain autoplay under current rule.
+- Releases are unsigned (notarization / Authenticode deferred).
 
 ---
 
@@ -117,12 +159,6 @@ cpal audio callback
 
 | Version | Focus |
 |---------|--------|
-| **v1** | Folder playlist, playback, waveform+EQ, BPM/key/Camelot, autoplay |
-| **v2** | Multi-deck load, BPM slider, physical-looking control strip, selection vs waveform, responsive layout |
-| **v3+** | Tag write-back, Rekordbox export, installable release, richer per-deck gear UI |
-
----
-
-## Handoff prompt for v2
-
-Copy the block in the chat reply titled **“Prompt for tomorrow (v2)”**, or ask the user for it. Do not start multi-deck work until that session unless explicitly requested.
+| **v1** *(current)* | Playlist, playback, waveform+EQ, BPM/key/Camelot, autoplay, right-click file ops, tag write-back, Mac+Windows GitHub Releases |
+| **v2** *(parked on `wip/v2-parked`)* | Multi-deck, tempo fader, WSOLA pitch-lock, sync — seek desync under investigation |
+| **v3+** | Notarized DMG, Authenticode, Rekordbox export, richer per-deck UI |

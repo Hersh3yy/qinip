@@ -1,22 +1,46 @@
-# DJ Player — User Manual (v1)
+# DJ Player — User Manual (v1.0.0)
 
-A desktop MP3 player for auditioning packs: playlist, waveform, EQ, BPM/key analysis.
+A desktop MP3 player for auditioning packs: playlist, waveform, EQ, BPM/key analysis, and file housekeeping.
 
 ---
 
-## Install & run
+## Install
 
-Requires a Mac (or other machine with Rust) and speakers/headphones.
+### From GitHub Releases (recommended)
+
+Download the zip for your OS from the project's **Releases** page:
+
+| File | What to do |
+|------|------------|
+| `dj-player-macos-arm64.zip` | Unzip → drag `DJ Player.app` to Applications |
+| `dj-player-windows-x64.zip` | Unzip → run `DJ Player.exe` |
+
+**macOS Gatekeeper:** if macOS blocks the app on first launch:
 
 ```bash
-# From the project folder
+xattr -cr ~/Applications/DJ\ Player.app
+```
+
+Then right-click → Open → Open.
+
+**Windows SmartScreen:** choose More info → Run anyway (unsigned build).
+
+### From source (requires Rust)
+
+```bash
 cargo run --release
 ```
 
-Optional debug logging in the terminal:
+### Build installers locally
 
 ```bash
-DJ_PLAYER_DEV=1 cargo run --release
+# macOS
+bash scripts/package-macos.sh
+# → target/release/bundle/osx/DJ Player.app
+
+# Windows (on a Windows machine)
+bash scripts/package-windows.sh
+# → target/release/dj-player-windows-x64.zip
 ```
 
 ---
@@ -28,6 +52,7 @@ DJ_PLAYER_DEV=1 cargo run --release
 3. **Double-click** a track (or select it and press **Enter**) to play.
 4. Use the **waveform** to seek; use **EQ knobs** to shape the sound.
 5. With **Autoplay** on, the next track starts after the current one ends (if you listened long enough — see below).
+6. **Right-click** a track title for file actions (move, write tags, delete).
 
 ---
 
@@ -39,19 +64,30 @@ DJ_PLAYER_DEV=1 cargo run --release
 | **Double-click** or **Enter** | Play the selected track |
 | **Backspace** (Mac) / **Delete** | Remove from playlist only — **never deletes the file** |
 | **Load Folder** / drop files | **Adds** to the existing list (skips duplicates) |
+| **Right-click** title | Context menu (see below) |
+
+### Right-click menu
+
+| Action | Result |
+|--------|--------|
+| **Play** | Start the track |
+| **Remove from playlist** | Drop from the list only (file stays on disk) |
+| **Move to folder…** | Pick a destination folder; moves the MP3 on disk and updates the playlist path |
+| **Write BPM/Key tags** | Writes analysis into the file's ID3 tags (`TBPM`, `TKEY`) — requires analysis to be finished |
+| **Delete from disk…** | Permanently deletes the MP3 after a confirm dialog — **cannot be undone** |
 
 ### Columns
 
 | Column | Meaning |
 |--------|---------|
 | **#** | Track number from tags (if present) |
-| **Artist** | From tags, or “Unknown Artist” |
+| **Artist** | From tags, or "Unknown Artist" |
 | **Title** | From tags, or filename; bar fills while loading/analyzing |
 | **Duration** | Length |
 | **BPM** | Estimated tempo |
 | **Key** | Estimated musical key |
 | **Camelot** | Same key as Camelot wheel code (e.g. `8A`) |
-| **Played** | ✓ after you’ve listened ≥ ~20 seconds (pauses don’t count) |
+| **Played** | ✓ after you've listened ≥ ~20 seconds (pauses don't count) |
 
 Hover the title to see the original filename.
 
@@ -62,7 +98,7 @@ Hover the title to see the original filename.
 - **Play/Pause** — top bar (also resumes the current deck track).
 - **Seek bar** — bottom; drag to jump in time.
 - **Vol** — master volume.
-- **Autoplay** — when on, plays the next playlist row after the current track finishes, but only if that track was “played” (≥ 20s listened).
+- **Autoplay** — when on, plays the next playlist row after the current track finishes, but only if that track was "played" (≥ 20s listened).
 
 ---
 
@@ -81,17 +117,18 @@ Hover the title to see the original filename.
 
 ## Tips
 
-- Prefer **`cargo run --release`** — analysis is much faster than debug builds.
-- Large folders analyze in the background; you can play a track as soon as its title bar starts filling / it’s decoded.
-- Removing a track only affects the session playlist.
+- Prefer `cargo run --release` or the release builds — analysis is much faster than debug.
+- Large folders analyze in the background; you can play a track as soon as its title bar starts filling.
+- Backspace only removes from the session playlist; use right-click → Delete from disk for permanent removal.
+- Malformed MP3 packets are skipped gracefully — the player will still load the rest of the file.
 
 ---
 
 ## Not in v1
 
-- Tempo (BPM) pitch control  
-- Multiple decks / mixing  
-- Writing analysis back into file tags  
-- Installer / App Store packaging  
+- Tempo / pitch control or multi-deck mixing
+- Apple notarization / Windows Authenticode (Gatekeeper / SmartScreen may warn)
+- Writing Camelot or custom tags (BPM + Key only)
+- Rekordbox export
 
-These are planned for later versions.
+These are deferred to later versions.

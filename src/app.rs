@@ -14,6 +14,7 @@ use crate::key::detect_key;
 use crate::knob::eq_knob;
 use crate::playback::PlaybackEngine;
 use crate::playlist::{AnalysisState, Playlist};
+use crate::tags;
 use crate::worker::{AnalysisWorker, WorkerJob, WorkerUpdate};
 
 struct AnalysisResult {
@@ -40,6 +41,8 @@ pub struct DjApp {
     autoplay: bool,
     was_playing: bool,
     last_listen_at: Option<f64>,
+    /// When set, show a confirm dialog before deleting this playlist index from disk.
+    confirm_delete: Option<usize>,
 }
 
 impl DjApp {
@@ -71,6 +74,7 @@ impl DjApp {
             autoplay: true,
             was_playing: false,
             last_listen_at: None,
+            confirm_delete: None,
         }
     }
 
@@ -293,7 +297,10 @@ impl DjApp {
         let Some(index) = self.selected else {
             return;
         };
+        self.remove_from_playlist(index);
+    }
 
+    fn remove_from_playlist(&mut self, index: usize) {
         let Some(removed) = self.playlist.remove_at(index) else {
             return;
         };
@@ -317,8 +324,116 @@ impl DjApp {
             self.selected = Some(index.min(self.playlist.tracks.len() - 1));
         }
 
+        if self.confirm_delete == Some(index) {
+            self.confirm_delete = None;
+        } else if let Some(pending) = self.confirm_delete
+            && pending > index
+        {
+            self.confirm_delete = Some(pending - 1);
+        }
+
         self.status_message = format!("Removed {} from playlist", removed.display_label());
         dev::log(format!("removed from playlist: {}", removed.path.display()));
+    }
+
+    fn delete_from_disk(&mut self, index: usize) {
+        let Some(path) = self.playlist.tracks.get(index).map(|t| t.path.clone()) else {
+            return;
+        };
+        let label = self.playlist.tracks[index].display_label();
+
+        match std::fs::remove_file(&path) {
+            Ok(()) => {
+                self.remove_from_playlist(index);
+                self.confirm_delete = None;
+                self.status_message = format!("Deleted from disk: {label}");
+                dev::log(format!("deleted from disk: {}", path.display()));
+            }
+            Err(err) => {
+                self.confirm_delete = None;
+                self.status_message = format!("Delete failed: {err}");
+            }
+        }
+    }
+
+    fn move_to_folder(&mut self, index: usize) {
+        let Some(old_path) = self.playlist.tracks.get(index).map(|t| t.path.clone()) else {
+            return;
+        };
+        let Some(file_name) = old_path.file_name().map(|n| n.to_owned()) else {
+            self.status_message = "Move failed: invalid path".to_string();
+            return;
+        };
+
+        let Some(folder) = rfd::FileDialog::new()
+            .set_title("Move track to folder")
+            .pick_folder()
+        else {
+            return;
+        };
+
+        let new_path = folder.join(&file_name);
+        if new_path == old_path {
+            self.status_message = "Already in that folder.".to_string();
+            return;
+        }
+        if new_path.exists() {
+            self.status_message = format!(
+                "Move failed: {} already exists in destination",
+                file_name.to_string_lossy()
+            );
+            return;
+        }
+
+        match std::fs::rename(&old_path, &new_path) {
+            Ok(()) => {
+                if let Some(audio) = self.audio_cache.remove(&old_path) {
+                    self.audio_cache.insert(new_path.clone(), audio);
+                }
+                if let Some(wave) = self.waveform_cache.remove(&old_path) {
+                    self.waveform_cache.insert(new_path.clone(), wave);
+                }
+                if let Some(track) = self.playlist.tracks.get_mut(index) {
+                    track.path = new_path.clone();
+                }
+                self.select_track(index);
+                self.status_message = format!(
+                    "Moved to {}",
+                    folder.file_name().and_then(|s| s.to_str()).unwrap_or("folder")
+                );
+                dev::log(format!(
+                    "moved {} → {}",
+                    old_path.display(),
+                    new_path.display()
+                ));
+            }
+            Err(err) => {
+                self.status_message = format!("Move failed: {err}");
+            }
+        }
+    }
+
+    fn write_tags_for(&mut self, index: usize) {
+        let Some(track) = self.playlist.tracks.get(index) else {
+            return;
+        };
+        let path = track.path.clone();
+        let label = track.display_label();
+        let (Some(bpm), Some(key)) = (track.bpm, track.key.clone()) else {
+            self.status_message =
+                "Write tags needs BPM and Key — wait for analysis to finish.".to_string();
+            return;
+        };
+
+        match tags::write_analysis_tags(&path, bpm, &key) {
+            Ok(()) => {
+                self.status_message = format!("Wrote BPM/Key tags to {label}");
+                dev::log(format!("wrote tags: {}", path.display()));
+            }
+            Err(err) => {
+                self.status_message = format!("Tag write failed: {err}");
+            }
+        }
     }
 
     fn toggle_playback(&mut self) {
@@ -644,6 +759,54 @@ impl eframe::App for DjApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let status = self.playback.status();
 
+        if let Some(index) = self.confirm_delete {
+            let label = self
+                .playlist
+                .tracks
+                .get(index)
+                .map(|t| t.display_label())
+                .unwrap_or_else(|| "this track".to_string());
+            let path_display = self
+                .playlist
+                .tracks
+                .get(index)
+                .map(|t| t.path.display().to_string())
+                .unwrap_or_default();
+
+            let mut open = true;
+            egui::Window::new("Delete from disk?")
+                .collapsible(false)
+                .resizable(false)
+                .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                .open(&mut open)
+                .show(ui.ctx(), |ui| {
+                    ui.label(format!("Permanently delete:\n{label}"));
+                    ui.label(
+                        egui::RichText::new(&path_display)
+                            .small()
+                            .weak(),
+                    );
+                    ui.label(
+                        egui::RichText::new("This cannot be undone.")
+                            .color(egui::Color32::LIGHT_RED),
+                    );
+                    ui.horizontal(|ui| {
+                        if ui.button("Cancel").clicked() {
+                            self.confirm_delete = None;
+                        }
+                        if ui
+                            .button(egui::RichText::new("Delete file").color(egui::Color32::RED))
+                            .clicked()
+                        {
+                            self.delete_from_disk(index);
+                        }
+                    });
+                });
+            if !open {
+                self.confirm_delete = None;
+            }
+        }
+
         egui::Panel::top("top_bar").show(ui, |ui| {
             ui.horizontal(|ui| {
                 if ui.button("Load Folder").clicked()
@@ -709,7 +872,7 @@ impl eframe::App for DjApp {
             ui.heading("Playlist");
             ui.label(
                 egui::RichText::new(
-                    "Click = select · Double-click / Enter = play · Backspace = remove from list",
+                    "Click = select · Double-click / Enter = play · Backspace = remove from list · Right-click = more",
                 )
                 .small()
                 .weak(),
@@ -723,6 +886,10 @@ impl eframe::App for DjApp {
 
             let mut pending_select = None;
             let mut pending_play = None;
+            let mut pending_remove = None;
+            let mut pending_delete = None;
+            let mut pending_move = None;
+            let mut pending_tags = None;
 
             // Reserve fixed widths for meta columns; Title takes the rest (full window).
             let avail = ui.available_width();
@@ -760,10 +927,7 @@ impl eframe::App for DjApp {
                             for index in 0..self.playlist.tracks.len() {
                                 let track = &self.playlist.tracks[index];
                                 ui.label(track.track_number_label());
-                                ui.add(
-                                    egui::Label::new(&track.artist)
-                                        .truncate(),
-                                );
+                                ui.add(egui::Label::new(&track.artist).truncate());
 
                                 let response = self.draw_title_cell(ui, index, title_w);
                                 if response.double_clicked() {
@@ -771,6 +935,36 @@ impl eframe::App for DjApp {
                                 } else if response.clicked() {
                                     pending_select = Some(index);
                                 }
+                                response.context_menu(|ui| {
+                                    if ui.button("Play").clicked() {
+                                        pending_play = Some(index);
+                                        ui.close();
+                                    }
+                                    if ui.button("Remove from playlist").clicked() {
+                                        pending_remove = Some(index);
+                                        ui.close();
+                                    }
+                                    ui.separator();
+                                    if ui.button("Move to folder…").clicked() {
+                                        pending_move = Some(index);
+                                        ui.close();
+                                    }
+                                    if ui.button("Write BPM/Key tags").clicked() {
+                                        pending_tags = Some(index);
+                                        ui.close();
+                                    }
+                                    ui.separator();
+                                    if ui
+                                        .button(
+                                            egui::RichText::new("Delete from disk…")
+                                                .color(egui::Color32::LIGHT_RED),
+                                        )
+                                        .clicked()
+                                    {
+                                        pending_delete = Some(index);
+                                        ui.close();
+                                    }
+                                });
 
                                 let track = &self.playlist.tracks[index];
                                 ui.label(track.duration_label());
@@ -801,6 +995,19 @@ impl eframe::App for DjApp {
                 self.request_play(index);
             } else if let Some(index) = pending_select {
                 self.select_track(index);
+            }
+            if let Some(index) = pending_remove {
+                self.remove_from_playlist(index);
+            }
+            if let Some(index) = pending_delete {
+                self.select_track(index);
+                self.confirm_delete = Some(index);
+            }
+            if let Some(index) = pending_move {
+                self.move_to_folder(index);
+            }
+            if let Some(index) = pending_tags {
+                self.write_tags_for(index);
             }
         });
     }

@@ -87,7 +87,11 @@ fn worker_loop(job_rx: Receiver<WorkerJob>, update_tx: Sender<WorkerUpdate>) {
         let audio = match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             decode_to_samples(&path_display)
         })) {
-            Ok(audio) => audio,
+            Ok(Ok(audio)) => audio,
+            Ok(Err(message)) => {
+                let _ = update_tx.send(WorkerUpdate::Failed { path, message });
+                continue;
+            }
             Err(_) => {
                 let _ = update_tx.send(WorkerUpdate::Failed {
                     path,

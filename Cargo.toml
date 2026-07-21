@@ -1,8 +1,15 @@
 [package]
 name = "dj_player"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
 default-run = "dj_player"
+
+[package.metadata.bundle]
+name = "DJ Player"
+identifier = "com.hirenbudhrani.dj-player"
+category = "public.app-category.music"
+short_description = "MP3 pack audition player"
+osx_minimum_system_version = "11.0"
 
 [[bin]]
 name = "analyze"
@@ -17,6 +24,7 @@ biquad = "0.6.0"
 cpal = "0.18.1"
 eframe = "0.35.0"
 egui = "0.35.0"
+id3 = "1.17.0"
 rfd = "0.17.2"
 ringbuf = "0.5.1"
 rustfft = "6.4.1"

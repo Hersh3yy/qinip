@@ -1,8 +1,8 @@
 use std::fs::File;
 use std::path::Path;
 
-use symphonia::core::audio::SampleBuffer;
-use symphonia::core::codecs::{DecoderOptions, CODEC_TYPE_NULL};
+use symphonia::core::audio::{SampleBuffer, SignalSpec};
+use symphonia::core::codecs::{CODEC_TYPE_NULL, DecoderOptions};
 use symphonia::core::errors::Error;
 use symphonia::core::formats::FormatOptions;
 use symphonia::core::io::MediaSourceStream;
@@ -64,12 +64,19 @@ impl DecodedAudio {
     }
 }
 
-pub fn decode_to_samples(path: &str) -> DecodedAudio {
-    let file = File::open(path).unwrap_or_else(|err| panic!("failed to open {path}: {err}"));
+/// Decode an audio file to interleaved `f32` samples.
+///
+/// Returns `Err` on hard failures. Malformed individual packets are skipped
+/// so a single bad frame does not abort the whole file.
+pub fn decode_to_samples(path: &str) -> Result<DecodedAudio, String> {
+    let file = File::open(path).map_err(|err| format!("failed to open: {err}"))?;
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
 
     let mut hint = Hint::new();
-    if let Some(ext) = std::path::Path::new(path).extension().and_then(|e| e.to_str()) {
+    if let Some(ext) = std::path::Path::new(path)
+        .extension()
+        .and_then(|e| e.to_str())
+    {
         hint.with_extension(ext);
     }
 
@@ -80,24 +87,21 @@ pub fn decode_to_samples(path: &str) -> DecodedAudio {
             &FormatOptions::default(),
             &MetadataOptions::default(),
         )
-        .unwrap_or_else(|err| panic!("failed to probe {path}: {err}"));
+        .map_err(|err| format!("failed to probe: {err}"))?;
 
     let mut format = probed.format;
     let track = format
         .tracks()
         .iter()
         .find(|t| t.codec_params.codec != CODEC_TYPE_NULL)
-        .unwrap_or_else(|| panic!("no audio track found in {path}"));
+        .ok_or_else(|| "no audio track found".to_string())?;
 
     let track_id = track.id;
     let mut decoder = symphonia::default::get_codecs()
         .make(&track.codec_params, &DecoderOptions::default())
-        .unwrap_or_else(|err| panic!("failed to create decoder for {path}: {err}"));
+        .map_err(|err| format!("failed to create decoder: {err}"))?;
 
-    let mut sample_rate = track
-        .codec_params
-        .sample_rate
-        .unwrap_or(44_100);
+    let mut sample_rate = track.codec_params.sample_rate.unwrap_or(44_100);
     let mut channels = track
         .codec_params
         .channels
@@ -106,47 +110,102 @@ pub fn decode_to_samples(path: &str) -> DecodedAudio {
 
     let mut samples: Vec<f32> = Vec::new();
     let mut sample_buf: Option<SampleBuffer<f32>> = None;
+    let mut buf_spec: Option<SignalSpec> = None;
+    let mut skipped_packets = 0u32;
 
     loop {
         let packet = match format.next_packet() {
-            Ok(packet) => packet,
-            Err(Error::ResetRequired) => continue,
+            Ok(pkt) => pkt,
+            // Some MP3s signal a format state reset; treat as hard failure.
+            Err(Error::ResetRequired) => {
+                return Err("stream reset required (unsupported)".to_string());
+            }
             Err(Error::IoError(_)) => break,
-            Err(err) => panic!("decode error in {path}: {err}"),
+            // Bad demux frames — skip and continue.
+            Err(Error::DecodeError(_)) => {
+                skipped_packets += 1;
+                continue;
+            }
+            Err(err) => return Err(format!("demux error: {err}")),
         };
 
         if packet.track_id() != track_id {
             continue;
         }
 
-        let decoded = decoder
-            .decode(&packet)
-            .unwrap_or_else(|err| panic!("packet decode failed for {path}: {err}"));
+        let decoded = match decoder.decode(&packet) {
+            Ok(d) => d,
+            // Malformed packets — skip without aborting the decode.
+            Err(Error::DecodeError(_)) | Err(Error::ResetRequired) => {
+                skipped_packets += 1;
+                continue;
+            }
+            Err(err) => {
+                // Symphonia sometimes surfaces malformed frames as other variants.
+                let msg = err.to_string();
+                if msg.contains("malformed") || msg.contains("invalid audio buffer") {
+                    skipped_packets += 1;
+                    continue;
+                }
+                return Err(format!("packet decode failed: {err}"));
+            }
+        };
 
         let spec = *decoded.spec();
         sample_rate = spec.rate;
         channels = spec.channels.count();
 
         let frame_count = decoded.capacity() as u64;
-        let buf = sample_buf.get_or_insert_with(|| SampleBuffer::<f32>::new(frame_count, spec));
-        if buf.capacity() < decoded.capacity() {
-            *buf = SampleBuffer::<f32>::new(frame_count, spec);
+        let needs_new_buf = match (&sample_buf, buf_spec) {
+            (None, _) => true,
+            (Some(buf), Some(prev)) => buf.capacity() < decoded.capacity() || prev != spec,
+            (Some(buf), None) => buf.capacity() < decoded.capacity(),
+        };
+        if needs_new_buf {
+            sample_buf = Some(SampleBuffer::<f32>::new(frame_count, spec));
+            buf_spec = Some(spec);
         }
 
+        let buf = sample_buf.as_mut().expect("sample buffer initialized above");
         buf.copy_interleaved_ref(decoded);
         samples.extend_from_slice(buf.samples());
     }
 
-    DecodedAudio {
+    if samples.is_empty() {
+        return Err(if skipped_packets > 0 {
+            format!("no usable audio ({skipped_packets} bad packet(s) skipped)")
+        } else {
+            "no audio samples decoded".to_string()
+        });
+    }
+
+    if skipped_packets > 0 {
+        eprintln!("[decode] {path}: skipped {skipped_packets} malformed packet(s)");
+    }
+
+    Ok(DecodedAudio {
         samples,
         sample_rate,
         channels,
-    }
+    })
 }
 
 /// Read title/artist/track#/duration from container tags without decoding audio.
 pub fn probe_metadata(path: &Path) -> TrackMetadata {
-    let file = File::open(path).unwrap_or_else(|err| panic!("failed to open {}: {err}", path.display()));
+    let fallback = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("Unknown")
+        .to_string();
+
+    let Ok(file) = File::open(path) else {
+        return TrackMetadata {
+            title: fallback,
+            artist: "Unknown Artist".to_string(),
+            track_number: None,
+            duration_secs: None,
+        };
+    };
     let mss = MediaSourceStream::new(Box::new(file), Default::default());
 
     let mut hint = Hint::new();
@@ -154,14 +213,19 @@ pub fn probe_metadata(path: &Path) -> TrackMetadata {
         hint.with_extension(ext);
     }
 
-    let mut probed = symphonia::default::get_probe()
-        .format(
-            &hint,
-            mss,
-            &FormatOptions::default(),
-            &MetadataOptions::default(),
-        )
-        .unwrap_or_else(|err| panic!("failed to probe {}: {err}", path.display()));
+    let Ok(mut probed) = symphonia::default::get_probe().format(
+        &hint,
+        mss,
+        &FormatOptions::default(),
+        &MetadataOptions::default(),
+    ) else {
+        return TrackMetadata {
+            title: fallback,
+            artist: "Unknown Artist".to_string(),
+            track_number: None,
+            duration_secs: None,
+        };
+    };
 
     let mut title = None;
     let mut artist = None;
@@ -206,15 +270,11 @@ pub fn probe_metadata(path: &Path) -> TrackMetadata {
         }
     }
 
-    let fallback = path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .unwrap_or("Unknown")
-        .to_string();
-
     TrackMetadata {
         title: title.unwrap_or(fallback),
-        artist: artist.or(album_artist).unwrap_or_else(|| "Unknown Artist".to_string()),
+        artist: artist
+            .or(album_artist)
+            .unwrap_or_else(|| "Unknown Artist".to_string()),
         track_number,
         duration_secs,
     }
