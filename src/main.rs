@@ -1,12 +1,12 @@
-use dj_player::app::QinipApp;
+use qinip::app::QinipApp;
 
 fn main() -> eframe::Result<()> {
-    if dj_player::dev::enabled() {
+    if qinip::dev::enabled() {
         eprintln!("Qinip — dev mode (stderr logging enabled)");
         eprintln!("Run with: QINIP_DEV=1 cargo run --release");
     }
 
-    let icon = std::sync::Arc::new(dj_player::app::load_app_icon());
+    let icon = std::sync::Arc::new(qinip::app::load_app_icon());
 
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()

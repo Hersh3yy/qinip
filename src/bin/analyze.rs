@@ -1,8 +1,8 @@
-use dj_player::bands::{band_summary, filter_bands, print_band_heatmap, print_band_summary};
-use dj_player::bpm::detect_bpm;
-use dj_player::decode::decode_to_samples;
-use dj_player::key::detect_key;
-use dj_player::waveform::{print_ascii_waveform, waveform_peaks};
+use qinip::bands::{band_summary, filter_bands, print_band_heatmap, print_band_summary};
+use qinip::bpm::detect_bpm;
+use qinip::decode::decode_to_samples;
+use qinip::key::detect_key;
+use qinip::waveform::{print_ascii_waveform, waveform_peaks};
 
 fn main() {
     let path = "test_audio_files/ZHU - Cocaine Model (Original Mix).mp3";

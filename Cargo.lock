@@ -951,25 +951,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dj_player"
-version = "1.0.0"
-dependencies = [
- "anyhow",
- "aubio-rs",
- "biquad",
- "cpal",
- "eframe",
- "egui",
- "id3",
- "image",
- "rfd",
- "ringbuf",
- "rustfft",
- "symphonia",
- "walkdir",
-]
-
-[[package]]
 name = "dlib"
 version = "0.5.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2895,6 +2876,25 @@ name = "pxfm"
 version = "0.1.30"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
+
+[[package]]
+name = "qinip"
+version = "1.0.0"
+dependencies = [
+ "anyhow",
+ "aubio-rs",
+ "biquad",
+ "cpal",
+ "eframe",
+ "egui",
+ "id3",
+ "image",
+ "rfd",
+ "ringbuf",
+ "rustfft",
+ "symphonia",
+ "walkdir",
+]
 
 [[package]]
 name = "quick-error"

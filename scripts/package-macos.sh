@@ -16,13 +16,13 @@ APP_DIR="$REPO_ROOT/target/release/bundle/osx/Qinip.app"
 cd "$REPO_ROOT"
 
 echo "==> Compiling release binary..."
-cargo build --release --bin dj_player
+cargo build --release --bin qinip
 
 echo "==> Assembling .app bundle..."
 mkdir -p "$APP_DIR/Contents/MacOS"
 mkdir -p "$APP_DIR/Contents/Resources"
 
-cp target/release/dj_player "$APP_DIR/Contents/MacOS/Qinip"
+cp target/release/qinip "$APP_DIR/Contents/MacOS/Qinip"
 
 ICON_SRC="$REPO_ROOT/assets/icon.png"
 ICONSET="$REPO_ROOT/target/icon.iconset"

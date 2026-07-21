@@ -17,9 +17,9 @@ ZIP_NAME="qinip-windows-x64.zip"
 cd "$REPO_ROOT"
 
 echo "==> Compiling release binary (Windows)..."
-cargo build --release --bin dj_player
+cargo build --release --bin qinip
 
-EXE="$OUT_DIR/dj_player.exe"
+EXE="$OUT_DIR/qinip.exe"
 if [ ! -f "$EXE" ]; then
   echo "ERROR: expected $EXE" >&2
   exit 1

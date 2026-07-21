@@ -51,9 +51,9 @@ jobs:
         env:
           LIBCLANG_PATH: C:\Program Files\LLVM\bin
         run: |
-          cargo build --release --bin dj_player
+          cargo build --release --bin qinip
           mkdir -p dist
-          cp target/release/dj_player.exe "dist/Qinip.exe"
+          cp target/release/qinip.exe "dist/Qinip.exe"
           cp USER_MANUAL.md dist/
           cp README.md dist/
           cd dist
