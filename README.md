@@ -30,6 +30,8 @@ Same idea here: load a bunch of songs, crack one open, see the waveform inside. 
 - Transport controls, gapless autoplay, write BPM/key back to file tags
 - Right-click tracks — move, tag, open folder, remove from list, delete from disk
 
+Qinip is free — download, use, share. If it saves you time or money, tips are welcome in the form of information, knowledge, and/or compliments.
+
 ---
 
 ## Download
