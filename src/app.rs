@@ -13,11 +13,13 @@ use crate::eq::{band_waveform_peaks, BandWaveform, EqGains, BAND_COLORS, BAND_LA
 use crate::file_ops;
 use crate::key::detect_key;
 use crate::knob::eq_knob;
+use crate::media::SystemMedia;
 use crate::playback::PlaybackEngine;
 use crate::playlist::{AnalysisState, Playlist, SortColumn, SortDirection};
 use crate::tags;
-use crate::transport::transport_button;
+use crate::transport::{beat_bar_indicator, transport_button};
 use crate::worker::{AnalysisWorker, WorkerJob, WorkerUpdate};
+use souvlaki::MediaControlEvent;
 
 struct AnalysisResult {
     path: PathBuf,
@@ -89,6 +91,11 @@ pub struct QinipApp {
     playlist_columns: PlaylistColumns,
     /// True once we've queued the upcoming track for gapless autoplay.
     autoplay_preloaded: bool,
+    system_media: SystemMedia,
+    /// Active beat loop size (2/4/8/16), if any.
+    loop_beats: Option<u32>,
+    loop_start_secs: f64,
+    loop_end_secs: f64,
 }
 
 impl QinipApp {
@@ -100,7 +107,11 @@ impl QinipApp {
 
         cc.egui_ctx.set_visuals(hardware_theme_visuals());
 
+        crate::macos_icon::set_dock_icon();
+
         let playback = PlaybackEngine::new().expect("failed to start audio output");
+        let system_media =
+            SystemMedia::new(cc.egui_ctx.clone()).expect("failed to init system media controls");
         let (worker, updates_rx) = AnalysisWorker::spawn();
         let (analysis_tx, analysis_rx) = mpsc::channel();
 
@@ -126,6 +137,10 @@ impl QinipApp {
             playlist_sort: None,
             playlist_columns: PlaylistColumns::default(),
             autoplay_preloaded: false,
+            system_media,
+            loop_beats: None,
+            loop_start_secs: 0.0,
+            loop_end_secs: 0.0,
         }
     }
 
@@ -337,6 +352,7 @@ impl QinipApp {
         self.selected = Some(index);
         self.last_listen_at = None;
         self.autoplay_preloaded = false;
+        self.clear_loop();
         self.was_playing = self
             .playlist
             .tracks
@@ -344,6 +360,7 @@ impl QinipApp {
             .is_some_and(|t| t.qualifies_as_played());
         self.status_message = format!("Playing {}", self.playlist.tracks[index].display_label());
         dev::log(format!("playing track #{index}"));
+        self.sync_system_media();
     }
 
     fn play_next(&mut self) {
@@ -359,6 +376,7 @@ impl QinipApp {
             self.was_playing = false;
             self.status_message = "Playlist finished.".to_string();
             dev::log("playlist finished");
+            self.sync_system_media();
         }
     }
 
@@ -379,6 +397,7 @@ impl QinipApp {
         self.last_listen_at = None;
         self.status_message = "Stopped.".to_string();
         dev::log("stop");
+        self.sync_system_media();
     }
 
     fn seek_relative(&mut self, delta_secs: f64) {
@@ -597,6 +616,99 @@ impl QinipApp {
         } else if let Some(index) = self.selected {
             self.request_play(index);
         }
+        self.sync_system_media();
+    }
+
+    fn clear_loop(&mut self) {
+        self.loop_beats = None;
+        self.loop_start_secs = 0.0;
+        self.loop_end_secs = 0.0;
+        let _ = self.playback.clear_loop();
+    }
+
+    fn current_bpm(&self) -> Option<f32> {
+        let index = self.playing_track.or(self.selected)?;
+        self.playlist.tracks.get(index)?.bpm
+    }
+
+    fn set_beat_loop(&mut self, beats: u32) {
+        if self.loop_beats == Some(beats) {
+            self.clear_loop();
+            self.status_message = "Loop off.".to_string();
+            return;
+        }
+
+        let Some(bpm) = self.current_bpm().filter(|b| *b > 0.0) else {
+            self.status_message = "Loop needs BPM — wait for analysis.".to_string();
+            return;
+        };
+
+        let position = self.playback.status().position_secs();
+        let beat_secs = 60.0 / bpm as f64;
+        let start = (position / beat_secs).floor() * beat_secs;
+        let end = start + beat_secs * beats as f64;
+
+        let duration = self.playback.status().duration_secs();
+        if duration > 0.0 && end > duration {
+            self.status_message = "Loop extends past track end.".to_string();
+            return;
+        }
+
+        self.loop_beats = Some(beats);
+        self.loop_start_secs = start;
+        self.loop_end_secs = end;
+        let _ = self.playback.set_loop_secs(start, end);
+        self.seek_slider = start.max(position);
+        if position >= end {
+            let _ = self.playback.seek_secs(start);
+            self.seek_slider = start;
+        }
+        self.status_message = format!("{beats}-beat loop (quantized @ {bpm:.0} BPM)");
+        dev::log(format!("{beats}-beat loop: {start:.3}s..{end:.3}s"));
+    }
+
+    fn sync_system_media(&mut self) {
+        let status = self.playback.status();
+        let (title, artist) = self
+            .playing_track
+            .and_then(|i| self.playlist.tracks.get(i))
+            .map(|t| (t.title.as_str(), t.artist.as_str()))
+            .unwrap_or(("Qinip", ""));
+
+        let duration = status.duration_secs();
+        self.system_media.set_metadata(title, artist, duration);
+        self.system_media.set_playback(status.is_playing(), status.position_secs(), duration);
+    }
+
+    fn poll_system_media(&mut self) {
+        let events = self.system_media.poll();
+        for event in events {
+            match event {
+                MediaControlEvent::Play => {
+                    if !self.playback.status().is_playing() {
+                        self.toggle_playback();
+                    }
+                }
+                MediaControlEvent::Pause => {
+                    if self.playback.status().is_playing() {
+                        let _ = self.playback.pause();
+                        self.last_listen_at = None;
+                        self.sync_system_media();
+                    }
+                }
+                MediaControlEvent::Toggle => self.toggle_playback(),
+                MediaControlEvent::Next => self.play_next(),
+                MediaControlEvent::Previous => self.play_previous(),
+                MediaControlEvent::Stop => self.stop_playback(),
+                MediaControlEvent::SetPosition(pos) => {
+                    let secs = pos.0.as_secs_f64();
+                    self.seek_slider = secs;
+                    let _ = self.playback.seek_secs(secs);
+                    self.sync_system_media();
+                }
+                _ => {}
+            }
+        }
     }
 
     fn handle_keyboard(&mut self, ctx: &egui::Context) {
@@ -706,6 +818,7 @@ impl QinipApp {
         self.selected = Some(next);
         self.last_listen_at = None;
         self.autoplay_preloaded = false;
+        self.clear_loop();
         self.was_playing = self
             .playlist
             .tracks
@@ -716,6 +829,7 @@ impl QinipApp {
             self.playlist.tracks[next].display_label()
         );
         dev::log(format!("gapless autoplay → #{next}"));
+        self.sync_system_media();
     }
 
     fn seek_from_waveform_click(&mut self, fraction: f64) {
@@ -802,10 +916,12 @@ impl QinipApp {
         let playing = self.playback.status().is_playing();
         let can_transport = self.has_transport_target();
         let can_play = self.can_play_or_pause();
+        let can_loop = self.current_bpm().is_some();
 
         let green = egui::Color32::from_rgb(45, 198, 83);
         let amber = egui::Color32::from_rgb(232, 150, 4);
         let cyan = egui::Color32::from_rgb(76, 201, 240);
+        let magenta = egui::Color32::from_rgb(220, 80, 200);
 
         ui.vertical(|ui| {
             ui.label(egui::RichText::new("Transport").small().weak());
@@ -828,14 +944,32 @@ impl QinipApp {
                 if transport_button(ui, "⏹", amber, can_transport, false) {
                     self.stop_playback();
                 }
-            });
-            ui.horizontal(|ui| {
                 if transport_button(ui, "−10", cyan, can_transport, false) {
                     self.seek_relative(-10.0);
                 }
                 if transport_button(ui, "+10", cyan, can_transport, false) {
                     self.seek_relative(10.0);
                 }
+
+                ui.separator();
+
+                for beats in [2u32, 4, 8, 16] {
+                    let active = self.loop_beats == Some(beats);
+                    if transport_button(
+                        ui,
+                        &beats.to_string(),
+                        magenta,
+                        can_loop,
+                        active,
+                    ) {
+                        self.set_beat_loop(beats);
+                    }
+                }
+
+                ui.separator();
+
+                let position = self.playback.status().position_secs();
+                beat_bar_indicator(ui, position, self.current_bpm());
             });
         });
     }
@@ -912,6 +1046,27 @@ impl QinipApp {
                 [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
                 egui::Stroke::new(2.0, egui::Color32::WHITE),
             );
+
+            if self.loop_beats.is_some() {
+                let start_frac =
+                    (self.loop_start_secs / duration).clamp(0.0, 1.0) as f32;
+                let end_frac = (self.loop_end_secs / duration).clamp(0.0, 1.0) as f32;
+                let loop_rect = egui::Rect::from_min_max(
+                    egui::pos2(rect.left() + start_frac * width, rect.top()),
+                    egui::pos2(rect.left() + end_frac * width, rect.bottom()),
+                );
+                painter.rect_filled(
+                    loop_rect,
+                    0.0,
+                    egui::Color32::from_rgba_unmultiplied(220, 80, 200, 40),
+                );
+                painter.rect_stroke(
+                    loop_rect,
+                    0.0,
+                    egui::Stroke::new(1.5, egui::Color32::from_rgb(220, 80, 200)),
+                    egui::StrokeKind::Inside,
+                );
+            }
         }
 
         if response.clicked() {
@@ -993,6 +1148,7 @@ impl eframe::App for QinipApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.playback.poll();
         self.poll_worker();
+        self.poll_system_media();
         self.handle_drops(ctx);
         self.handle_keyboard(ctx);
 
@@ -1008,6 +1164,7 @@ impl eframe::App for QinipApp {
         let status = self.playback.status();
         if status.is_playing() {
             self.seek_slider = status.position_secs();
+            self.sync_system_media();
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
         } else if self.autoplay && self.playing_track.is_some() {
             // Keep polling near track boundaries so gapless preload/swap is timely.

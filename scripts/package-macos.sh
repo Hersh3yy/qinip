@@ -36,6 +36,7 @@ if [ -f "$ICON_SRC" ]; then
     sips -z "$double" "$double" "$ICON_SRC" --out "$ICONSET/icon_${size}x${size}@2x.png" >/dev/null
   done
   iconutil -c icns "$ICONSET" -o "$APP_DIR/Contents/Resources/AppIcon.icns"
+  rm -rf "$ICONSET"
 fi
 
 cat > "$APP_DIR/Contents/Info.plist" <<'PLIST'
@@ -77,12 +78,16 @@ PLIST
 
 echo "==> Ad-hoc code signing..."
 codesign --force --deep -s - "$APP_DIR"
+touch "$APP_DIR"
 
 echo ""
 echo "Done! Bundle at:"
 echo "  $APP_DIR"
 echo ""
-echo "To install, drag it to ~/Applications."
+echo "To install, drag it to ~/Applications (replace the old copy if one exists)."
+echo ""
+echo "If the Dock icon still looks stale after replacing the app:"
+echo "  killall Dock"
 echo ""
 echo "If macOS blocks it on first launch:"
 echo "  xattr -cr \"$APP_DIR\""

@@ -18,6 +18,8 @@ enum PlaybackCommand {
     SeekFrame(u64),
     SetVolume(f32),
     SetEq(EqGains),
+    SetLoop { start_frame: u64, end_frame: u64 },
+    ClearLoop,
 }
 
 #[derive(Debug)]
@@ -68,6 +70,9 @@ struct SharedPlayback {
     eq_hi: AtomicU32,
     output_channels: usize,
     output_sample_rate: u32,
+    loop_active: AtomicBool,
+    loop_start_frame: AtomicU64,
+    loop_end_frame: AtomicU64,
 }
 
 pub struct PlaybackEngine {
@@ -116,6 +121,9 @@ impl PlaybackEngine {
             eq_hi: AtomicU32::new(unity.hi.to_bits()),
             output_channels,
             output_sample_rate,
+            loop_active: AtomicBool::new(false),
+            loop_start_frame: AtomicU64::new(0),
+            loop_end_frame: AtomicU64::new(0),
         });
 
         let status = Arc::new(PlaybackStatus {
@@ -260,6 +268,22 @@ impl PlaybackEngine {
         Ok(())
     }
 
+    pub fn set_loop_secs(&self, start_secs: f64, end_secs: f64) -> anyhow::Result<()> {
+        let rate = self.shared.sample_rate.load(Ordering::Relaxed).max(1);
+        let start_frame = (start_secs.max(0.0) * rate as f64).round() as u64;
+        let end_frame = (end_secs.max(0.0) * rate as f64).round() as u64;
+        self.cmd_tx.send(PlaybackCommand::SetLoop {
+            start_frame,
+            end_frame,
+        })?;
+        Ok(())
+    }
+
+    pub fn clear_loop(&self) -> anyhow::Result<()> {
+        self.cmd_tx.send(PlaybackCommand::ClearLoop)?;
+        Ok(())
+    }
+
     fn apply(&self, cmd: PlaybackCommand) {
         match cmd {
             PlaybackCommand::Load(audio) => {
@@ -285,6 +309,7 @@ impl PlaybackEngine {
                 self.shared.playhead_frame.store(0, Ordering::Relaxed);
                 self.shared.playing.store(false, Ordering::Relaxed);
                 self.shared.auto_advanced.store(false, Ordering::Relaxed);
+                self.clear_loop_internal();
                 self.clear_queued_next();
                 self.reset_eq();
 
@@ -345,6 +370,35 @@ impl PlaybackEngine {
                     gains.low, gains.low_mid, gains.hi_mid, gains.hi
                 ));
             }
+            PlaybackCommand::SetLoop {
+                start_frame,
+                end_frame,
+            } => {
+                if end_frame <= start_frame {
+                    self.clear_loop_internal();
+                    return;
+                }
+                self.shared
+                    .loop_start_frame
+                    .store(start_frame, Ordering::Relaxed);
+                self.shared
+                    .loop_end_frame
+                    .store(end_frame, Ordering::Relaxed);
+                self.shared.loop_active.store(true, Ordering::Relaxed);
+                let current = self.shared.playhead_frame.load(Ordering::Relaxed);
+                if current >= end_frame {
+                    self.shared
+                        .playhead_frame
+                        .store(start_frame, Ordering::Relaxed);
+                }
+                dev::log(format!(
+                    "loop set: frames {start_frame}..{end_frame}"
+                ));
+            }
+            PlaybackCommand::ClearLoop => {
+                self.clear_loop_internal();
+                dev::log("loop cleared");
+            }
         }
     }
 
@@ -373,6 +427,12 @@ impl PlaybackEngine {
 
     fn clear_queued_next(&self) {
         *self.shared.next_track.lock().expect("next track lock") = None;
+    }
+
+    fn clear_loop_internal(&self) {
+        self.shared.loop_active.store(false, Ordering::Relaxed);
+        self.shared.loop_start_frame.store(0, Ordering::Relaxed);
+        self.shared.loop_end_frame.store(0, Ordering::Relaxed);
     }
 
     fn reset_eq(&self) {
@@ -460,6 +520,16 @@ fn render_output_f32(data: &mut [f32], shared: &SharedPlayback, status: &Playbac
         }
 
         frame += 1;
+        if shared.loop_active.load(Ordering::Relaxed) {
+            let loop_start = shared.loop_start_frame.load(Ordering::Relaxed);
+            let loop_end = shared.loop_end_frame.load(Ordering::Relaxed);
+            if loop_end > loop_start && frame >= loop_end {
+                frame = loop_start;
+                for eq in eqs.iter_mut() {
+                    eq.reset(shared.output_sample_rate);
+                }
+            }
+        }
         out_frame += 1;
         shared.playhead_frame.store(frame, Ordering::Relaxed);
         status.playhead_frame.store(frame, Ordering::Relaxed);
