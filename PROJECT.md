@@ -1,0 +1,167 @@
+<!--
+  PROJECT.md — the cockpit for this repo. One file to open and know where things stand.
+  Maintained by the `project-map` skill. The assessment (status/issues/roadmap) is
+  refreshed each session; the Diary at the bottom only grows. App-code changes need a
+  green light; the working branch is merged only when sure.
+  Keep the section order and headings identical across every project.
+-->
+
+# Qinip — cockpit
+
+**What it is** · Free MP3 pack-audition player for macOS/Windows: playlist, coloured 4-band waveform, EQ knobs, background BPM/key/Camelot analysis, gapless autoplay.
+**Stack** · Rust, egui/eframe (immediate-mode GUI), cpal (audio out), symphonia (MP3 decode), aubio (BPM/key), souvlaki (OS media controls), id3 (tag write).
+**Status** · 🟡 rough — v1.0.0 ships and runs; multi-select, folder groups and multi-folder drop landed on the feature branch (compiles, 4 unit tests green); system media keys still need a real-world check in the bundle; release next week needs signing + notarization (see `docs/release-and-code-quality.md`).
+**Repo** · git@github.com:Hersh3yy/qinip.git · working on `feat/multiselect-folders-media` (merge to `master` only when sure)
+**Hosting** · Desktop app. Distributed as GitHub Releases (`Qinip.app` zip for macOS arm64, `Qinip.exe` zip for Windows x64).
+**ClickUp** · not linked
+**Last assessed** · 2026-09-22
+
+---
+
+## Run it
+
+```bash
+cargo run --release
+```
+
+- `--release` matters: analysis (aubio) is ~18x faster than debug.
+- Dev logging: `QINIP_DEV=1 cargo run --release` (stderr timing/logs).
+- macOS `.app` bundle: `bash scripts/package-macos.sh` → `target/release/bundle/osx/Qinip.app`.
+- Windows package: `scripts/package-windows.sh`.
+- Gotcha: `cargo run` runs a bare binary, not the `.app` bundle. Dock icon is force-set in code for that reason (`src/macos_icon.rs:1`), and OS media-key routing likely needs the bundle too (see Issues #1).
+
+## Status
+
+v1.0.0 is real and used: load folders of MP3s, sortable playlist, per-band coloured waveform, 4-band EQ, background BPM/key/Camelot, gapless autoplay, tag write-back, right-click track ops. On `feat/multiselect-folders-media`: the souvlaki media-controls WIP is committed as a fallback point, and on top of it multi-select (Shift/Cmd click, Cmd+A, Esc, batch Backspace), per-folder group headers in the load-order view, and multi-folder drop. `cargo check` green, no warnings, `cargo test` 4/4. A fresh ad-hoc-signed `Qinip.app` is built at `target/release/bundle/osx/`. Not yet verified by a human: media keys in the bundle, the new selection UX by feel. Release blocker for "trustworthy" is signing + notarization; the full plan is in `docs/release-and-code-quality.md`.
+
+## Issues
+
+| Sev | Issue | Where |
+|---|---|---|
+| serious | Release is ad-hoc signed (`-s -`), no hardened runtime, no notarization. Gatekeeper will block it for strangers; the script even tells users to `xattr -cr`. Needs Developer ID + notarytool + stapler. | `scripts/package-macos.sh:88` |
+| serious | System play/pause / media keys: wiring is correct in code, but macOS only routes media keys to a bundled, registered Now Playing app. Untested by a human in `Qinip.app`. Verify in the bundle; if it still fails there, dig into souvlaki registration. | `src/media.rs`, `src/app.rs` (`poll_system_media`) |
+| serious | App panics at startup with no audio output device (`PlaybackEngine::new().expect`). Headless or Bluetooth-mid-switch Macs get a crash report, not a window. | `src/app.rs` (`QinipApp::new`), `src/playback.rs:87` |
+| warning | `move_to_folder` uses `fs::rename`, which fails across volumes (USB stick / external SSD). Needs copy-then-remove fallback. | `src/app.rs` (`move_to_folder`) |
+| warning | `playing_track` / `confirm_delete` are still raw indices that get hand-shifted on remove/sort (selection now goes through `Selection::remap`). A `TrackId` would delete that code. | `src/app.rs` (`remove_from_playlist`) |
+| warning | Resampling runs on the UI thread on Load when device rate ≠ file rate (the 44.1/48 kHz norm). Tens of ms stall per track. | `src/playback.rs:294` |
+| note | Worker polls with a 20 ms sleep instead of blocking on `recv()`. | `src/worker.rs:75` |
+| note | 7 clippy warnings, all minor (`Copy` clones, collapsible ifs, `impl Default`). | see docs |
+
+## Guide
+
+Immediate-mode GUI: `eframe::App` for `QinipApp` runs every frame as `logic()` (state: poll audio, worker, media, keyboard, autoplay) then `ui()` (draw). Entry is `src/main.rs` → `QinipApp::new` (`src/app.rs:102`).
+
+The pieces:
+- **Playlist model** (`src/playlist.rs`): `Playlist { tracks: Vec<TrackEntry> }`. `TrackEntry` holds path, tags, analysis state, `load_order` (to restore the unsorted view), `source_folder` (which Load Folder / drop it came from; drives the group headers), and listen tracking (`listened_secs`, `played` at 20s). `append_folder`/`append_paths` walk MP3s, skip dupes, keep insertion order.
+- **Selection** (`src/selection.rs`): `Selection { anchor, set }`. The anchor is what single-row actions (Enter, waveform, transport) act on; the set is what Backspace removes. `remap` carries it across a sort, `after_remove` across a removal. Unit-tested.
+- **Playback** (`src/playback.rs`, `src/transport.rs`): cpal output thread fed via a ring buffer; `PlaybackEngine::status()` is the UI's read model (playing?, position, duration). EQ applied in the audio path.
+- **Analysis** (`src/worker.rs`, `src/bpm.rs`, `src/key.rs`, `src/decode.rs`, `src/waveform.rs`, `src/bands.rs`): background worker decodes + runs aubio for BPM and key, converts key to Camelot, and builds the per-band waveform; results arrive over channels and get merged into the matching `TrackEntry`.
+- **OS media** (`src/media.rs`, NEW): souvlaki `MediaControls`; `poll_system_media` (`src/app.rs:703`) drains events (Play/Pause/Toggle/Next/Prev/Seek) into engine calls; `sync_system_media` pushes title/artist/position/state back to Now Playing each frame while playing.
+- **Domain words**: *Camelot* = harmonic-mixing wheel code (e.g. 8A) derived from musical key. *Played* = a track that got ≥20s of actual playback (gates the autoplay chain). *load_order* = original append order, used as the "no sort" view.
+
+**Architecture — what flows between the modules:**
+
+```mermaid
+flowchart TD
+    UI["egui UI: playlist, waveform, EQ, transport"]
+    App["QinipApp: per-frame logic then ui"]
+    PL["Playlist: Vec of TrackEntry"]
+    PB["PlaybackEngine: cpal output thread"]
+    W["AnalysisWorker: decode, BPM, key, waveform"]
+    SM["SystemMedia: souvlaki OS media controls"]
+    OS["macOS Now Playing and media keys"]
+
+    UI --> App
+    App --> PL
+    App --> PB
+    App --> W
+    App --> SM
+    W -->|"results via channel"| App
+    PB -->|"status: playing, position, duration"| App
+    SM <-->|"events and playback state"| OS
+```
+
+**System play/pause round-trip (the thing being debugged this session):**
+
+```mermaid
+sequenceDiagram
+    participant OS as macOS
+    participant SM as SystemMedia
+    participant App as QinipApp
+    participant PB as PlaybackEngine
+    OS->>SM: media key or Control Center event
+    SM->>App: poll_system_media drains events
+    App->>PB: toggle, pause, next, seek
+    App->>SM: sync_system_media pushes state
+    SM->>OS: Now Playing metadata and playback
+```
+
+## Hard parts
+
+### OS media keys route to the bundled app, not the binary
+
+🔭 **What it does** — souvlaki talks to macOS `MPRemoteCommandCenter` / `MPNowPlayingInfoCenter`. The OS decides which app owns the media keys and the Control Center transport by which registered app last published a non-stopped Now Playing state. A raw `cargo run` binary is not a Launch Services app, so the OS keeps routing keys to Music.app and never to Qinip.
+
+⚖️ **Why this way** — Apple deliberately centralises transport control; there is no "grab the F8 key" API for a plain executable. Registering through the media-remote framework from inside a bundle is the sanctioned path.
+
+🗣️ **Say it to a senior** — "Media keys are owned by the system's now-playing coordinator, so the fix isn't in our key handling, it's making sure we register as a proper bundled now-playing app and publish playback state."
+
+### Batch removal has to run high index to low
+
+🔭 **What it does** — Tracks live in a `Vec`, so removing index `i` shifts every later index down by one. Deleting a multi-selection by ascending index corrupts the rest of the selection. Removing in descending order keeps the not-yet-removed indices valid.
+
+🗣️ **Say it to a senior** — "When you delete several rows from a vector-backed list in one pass, you remove from the bottom up so the surviving indices don't shift under you."
+
+### Folder separators only make sense in load-order view
+
+🔭 **What it does** — A "this track came from folder X" grouping is only meaningful while the list is in append order. The moment the user sorts by BPM/Artist/etc., rows from different folders interleave and any separator becomes noise. So folder grouping has to be conditional on `playlist_sort == None`.
+
+🗣️ **Say it to a senior** — "Grouping and sorting are mutually exclusive views of the same list, so the folder separators render only in the unsorted view."
+
+## Roadmap — near future
+
+Release is next week. Order is risk reduced per hour; full detail per item in `docs/release-and-code-quality.md`.
+
+- [ ] Verify system play/pause in the packaged `Qinip.app` (media keys, Control Center, Bluetooth headphone button). If it fails there too, dig into souvlaki registration. <!-- id:n1 -->
+- [x] Multi-select + batch delete (Shift/Cmd click, Cmd+A, Esc, Backspace removes the set high→low). <!-- id:n2 -->
+- [x] Folder group headers in load-order view, driven by `TrackEntry::source_folder`. <!-- id:n3 -->
+- [x] Multi-folder / folder+file drop loads everything. <!-- id:n4 -->
+- [x] Feature branch + WIP committed as a fallback point. <!-- id:n5 -->
+- [ ] Hiren test-drives the new selection UX and folder headers in the bundle; adjust by feel. <!-- id:n6 -->
+- [ ] Trustworthy macOS release: enroll Developer Program, Developer ID Application cert, `codesign --options runtime --timestamp` with empty entitlements, `notarytool submit --wait`, `stapler staple`, `spctl --assess`; ship as dmg or stapled zip; delete the `xattr -cr` advice. <!-- id:r1 -->
+- [ ] Same in CI: signing secrets + notarize/staple in `.github/workflows/release.yml` so a tag produces a notarized artifact. <!-- id:r2 -->
+- [ ] Don't panic on missing audio device: `playback: Option<PlaybackEngine>` + banner + retry. <!-- id:r3 -->
+- [ ] `move_to_folder`: copy-then-remove fallback when `rename` crosses volumes. <!-- id:r4 -->
+- [ ] `TrackId` identity for `playing_track` / `confirm_delete`; delete the index-shifting code. <!-- id:r6 -->
+- [ ] Unit tests for `remove_from_playlist`, `compare_tracks`, `beat_in_bar`, `resample_interleaved`. <!-- id:r7 -->
+
+## Roadmap — far future
+
+- [ ] Resampling off the UI thread, or cache per device rate. <!-- id:r8 -->
+- [ ] Worker blocks on `recv()` instead of a 20 ms sleep. <!-- id:r9 -->
+- [ ] Split the god object: `playlist_view.rs`, `transport_view.rs`, `theme.rs`, `analysis.rs`, and a `PlaylistAction` enum (name the Command pattern already in use). <!-- id:r10 -->
+- [ ] Windows: Authenticode signing (OV cert, e.g. Certum) + verify souvlaki with a real `hwnd`. <!-- id:f1 -->
+- [ ] Persist playlist / session between launches. <!-- id:f2 -->
+- [ ] Non-MP3 formats (FLAC/WAV/AAC) via symphonia's other decoders. <!-- id:f3 -->
+- [ ] Package-currency pass: `cargo outdated`, patch/minor + security bumps behind the build check; `cargo clippy --fix --lib` for the 6 auto-fixable warnings. <!-- id:f4 -->
+
+---
+
+## Diary
+
+<!-- Newest first. One entry per working session. Terse, factual, honest. Append only. -->
+
+### 2026-09-22 (later) — built the three features, release audit
+- Green light received. Branch `feat/multiselect-folders-media` off `master`; committed the pre-existing souvlaki/transport WIP as `ab1bbe6` (fallback point), untracked `.DS_Store`.
+- New `src/selection.rs` (anchor + set, 3 unit tests). `app.rs`: `selected: Option<usize>` replaced by `Selection`; plain/Shift/Cmd click, Cmd+A, Esc, Backspace removes the set high→low; multi-selected rows get an amber wash, anchor keeps the white outline. Selection survives sort via `remap` by path.
+- `playlist.rs`: `TrackEntry::source_folder`, `append_with_source`, `distinct_source_count`. Group header rows (📁 name · count, hover = full path) drawn only when unsorted and >1 source. `handle_drops` now loads every folder and the loose files.
+- Ran the read-only release/quality audit (agent) → `docs/release-and-code-quality.md`; roadmap items r1..r10 added. Headline: the build is ad-hoc signed; trustworthy release needs Developer ID + notarytool + stapler.
+- Docs: `USER_MANUAL.md` folded into `README.md` and deleted; PROJECT.md gained two Mermaid diagrams (render-verified). Skill updated to require both.
+- Built `Qinip.app` via `scripts/package-macos.sh` (release, ad-hoc). Handed to Hiren to test-drive; media keys unverified by a human.
+- Not done: ClickUp link (the sandbox refused to read the token from `hiren-ninja`; Hiren runs the setup command himself).
+
+### 2026-09-22 — first map, triaged Hiren's three asks
+- Renewed: wrote this PROJECT.md. `cargo check` green on the current working tree.
+- Found the working tree mid-flight: souvlaki media integration (`src/media.rs`) + macos_icon + transport rework staged but uncommitted on `master`; app.rs/tags.rs also dirty.
+- Diagnosed the three asks without touching app code (green-light rule): (1) media play/pause wiring looks correct in code — prime suspect is bundle/registration, verify in the `.app` first; (2) select-all+delete needs real multi-select (currently single `Option<usize>`); (3) folder separators need a per-track source folder + conditional grouping in load-order view, and the multi-folder drop bug (only first folder loads) should be fixed alongside.
+- Left red: nothing built/changed — awaiting green light on which of n1–n5 to start.

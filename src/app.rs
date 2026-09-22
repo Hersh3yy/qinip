@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
@@ -14,6 +14,7 @@ use crate::file_ops;
 use crate::key::detect_key;
 use crate::knob::eq_knob;
 use crate::media::SystemMedia;
+use crate::selection::Selection;
 use crate::playback::PlaybackEngine;
 use crate::playlist::{AnalysisState, Playlist, SortColumn, SortDirection};
 use crate::tags;
@@ -76,7 +77,8 @@ pub struct QinipApp {
     analysis_rx: Receiver<AnalysisResult>,
     audio_cache: HashMap<PathBuf, Arc<DecodedAudio>>,
     waveform_cache: HashMap<PathBuf, BandWaveform>,
-    selected: Option<usize>,
+    /// Anchor row + multi-select set. `selected()` gives the anchor.
+    selection: Selection,
     playing_track: Option<usize>,
     volume: f32,
     eq: EqGains,
@@ -124,7 +126,7 @@ impl QinipApp {
             analysis_rx,
             audio_cache: HashMap::new(),
             waveform_cache: HashMap::new(),
-            selected: None,
+            selection: Selection::default(),
             playing_track: None,
             volume: 0.85,
             eq: EqGains::default(),
@@ -235,6 +237,22 @@ impl QinipApp {
             let start = std::time::Instant::now();
             let outcome = run_bpm_key_analysis(&audio);
             dev::log_timing(&format!("bpm+key {}", path.display()), start);
+            if let Ok((bpm, ref key)) = outcome {
+                match tags::write_analysis_tags(&path, bpm, key) {
+                    Ok(true) => {
+                        dev::log(format!("wrote missing BPM/Key tags: {}", path.display()));
+                    }
+                    Ok(false) => {
+                        dev::log(format!(
+                            "BPM/Key tags already present, left intact: {}",
+                            path.display()
+                        ));
+                    }
+                    Err(err) => {
+                        dev::log(format!("tag write failed {}: {err}", path.display()));
+                    }
+                }
+            }
             let _ = tx.send(AnalysisResult { path, outcome });
         });
     }
@@ -294,16 +312,46 @@ impl QinipApp {
         dev::log("queued analyze-pending");
     }
 
+    /// The focused (anchor) row — what single-row actions act on.
+    fn selected(&self) -> Option<usize> {
+        self.selection.anchor()
+    }
+
     fn select_track(&mut self, index: usize) {
-        self.selected = Some(index);
+        self.selection.select_only(index);
         if let Some(track) = self.playlist.tracks.get(index) {
             self.status_message = format!("Selected {}", track.display_label());
             dev::log(format!("selected track #{index}"));
         }
     }
 
+    /// Click on a row with the modifiers held at that moment:
+    /// Shift extends a range from the anchor, Cmd/Ctrl toggles, plain selects only.
+    fn click_track(&mut self, index: usize, modifiers: egui::Modifiers) {
+        if modifiers.shift {
+            self.selection.extend_to(index);
+        } else if modifiers.command {
+            self.selection.toggle(index);
+        } else {
+            self.select_track(index);
+            return;
+        }
+        let n = self.selection.len();
+        self.status_message = format!("{n} track{} selected", if n == 1 { "" } else { "s" });
+    }
+
+    fn select_all_tracks(&mut self) {
+        let n = self.playlist.tracks.len();
+        if n == 0 {
+            return;
+        }
+        self.selection.select_all(n);
+        self.status_message = format!("{n} tracks selected — Backspace removes them from the list");
+        dev::log("select all");
+    }
+
     fn request_play(&mut self, index: usize) {
-        self.selected = Some(index);
+        self.selection.select_only(index);
 
         if self
             .playlist
@@ -349,7 +397,7 @@ impl QinipApp {
         let _ = self.playback.play();
 
         self.playing_track = Some(index);
-        self.selected = Some(index);
+        self.selection.select_only(index);
         self.last_listen_at = None;
         self.autoplay_preloaded = false;
         self.clear_loop();
@@ -364,7 +412,7 @@ impl QinipApp {
     }
 
     fn play_next(&mut self) {
-        let Some(current) = self.playing_track.or(self.selected) else {
+        let Some(current) = self.playing_track.or(self.selected()) else {
             return;
         };
         let next = current + 1;
@@ -381,7 +429,7 @@ impl QinipApp {
     }
 
     fn play_previous(&mut self) {
-        let Some(current) = self.playing_track.or(self.selected) else {
+        let Some(current) = self.playing_track.or(self.selected()) else {
             return;
         };
         if current > 0 {
@@ -415,7 +463,7 @@ impl QinipApp {
     fn has_transport_target(&self) -> bool {
         !self.playlist.tracks.is_empty()
             && (self.playing_track.is_some()
-                || self.selected.is_some()
+                || self.selected().is_some()
                 || self.playback.status().duration_secs() > 0.0)
     }
 
@@ -436,9 +484,8 @@ impl QinipApp {
         let playing_path = self
             .playing_track
             .and_then(|i| self.playlist.tracks.get(i).map(|t| t.path.clone()));
-        let selected_path = self
-            .selected
-            .and_then(|i| self.playlist.tracks.get(i).map(|t| t.path.clone()));
+        // Selection is index-based; carry it across the reorder by path.
+        let old_paths: Vec<PathBuf> = self.playlist.tracks.iter().map(|t| t.path.clone()).collect();
 
         match self.playlist_sort {
             Some((column, direction)) => self.playlist.sort_by(column, direction),
@@ -448,9 +495,9 @@ impl QinipApp {
         self.playing_track = playing_path
             .as_ref()
             .and_then(|path| self.playlist.index_of(path));
-        self.selected = selected_path
-            .as_ref()
-            .and_then(|path| self.playlist.index_of(path));
+        let playlist = &self.playlist;
+        self.selection
+            .remap(|old| old_paths.get(old).and_then(|p| playlist.index_of(p)));
     }
 
     fn open_track_folder(&mut self, index: usize) {
@@ -463,11 +510,31 @@ impl QinipApp {
         }
     }
 
+    /// Backspace/Delete: remove every selected row (or just the anchor).
+    /// Removes highest index first so the remaining indices stay valid.
     fn remove_selected(&mut self) {
-        let Some(index) = self.selected else {
-            return;
+        let indices = if self.selection.is_empty() {
+            self.selected().into_iter().collect()
+        } else {
+            self.selection.indices_desc()
         };
-        self.remove_from_playlist(index);
+        let count = indices.len();
+        if count == 0 {
+            return;
+        }
+        let first = *indices.last().unwrap_or(&0);
+        for index in indices {
+            self.remove_from_playlist(index);
+        }
+        if count > 1 {
+            self.status_message = format!("Removed {count} tracks from playlist");
+            dev::log(format!("removed {count} tracks from playlist"));
+        }
+        // Land the focus where the removed block started.
+        if !self.playlist.tracks.is_empty() {
+            self.selection
+                .select_only(first.min(self.playlist.tracks.len() - 1));
+        }
     }
 
     fn remove_from_playlist(&mut self, index: usize) {
@@ -488,10 +555,12 @@ impl QinipApp {
             self.playing_track = Some(playing - 1);
         }
 
+        self.selection.after_remove(index);
         if self.playlist.tracks.is_empty() {
-            self.selected = None;
-        } else {
-            self.selected = Some(index.min(self.playlist.tracks.len() - 1));
+            self.selection.clear();
+        } else if self.selection.is_empty() {
+            self.selection
+                .select_only(index.min(self.playlist.tracks.len() - 1));
         }
 
         if self.confirm_delete == Some(index) {
@@ -596,9 +665,13 @@ impl QinipApp {
         };
 
         match tags::write_analysis_tags(&path, bpm, &key) {
-            Ok(()) => {
-                self.status_message = format!("Wrote BPM/Key tags to {label}");
+            Ok(true) => {
+                self.status_message = format!("Wrote missing BPM/Key tags to {label}");
                 dev::log(format!("wrote tags: {}", path.display()));
+            }
+            Ok(false) => {
+                self.status_message =
+                    format!("BPM/Key tags already present on {label} — left intact");
             }
             Err(err) => {
                 self.status_message = format!("Tag write failed: {err}");
@@ -613,7 +686,7 @@ impl QinipApp {
             self.last_listen_at = None;
         } else if self.playing_track.is_some() {
             let _ = self.playback.play();
-        } else if let Some(index) = self.selected {
+        } else if let Some(index) = self.selected() {
             self.request_play(index);
         }
         self.sync_system_media();
@@ -627,7 +700,7 @@ impl QinipApp {
     }
 
     fn current_bpm(&self) -> Option<f32> {
-        let index = self.playing_track.or(self.selected)?;
+        let index = self.playing_track.or(self.selected())?;
         self.playlist.tracks.get(index)?.bpm
     }
 
@@ -717,9 +790,21 @@ impl QinipApp {
         let remove = ctx.input(|i| {
             i.key_pressed(egui::Key::Backspace) || i.key_pressed(egui::Key::Delete)
         });
+        // `command` is Cmd on macOS and Ctrl elsewhere.
+        let select_all = ctx.input(|i| i.modifiers.command && i.key_pressed(egui::Key::A));
+        let escape = ctx.input(|i| i.key_pressed(egui::Key::Escape));
 
-        if enter && let Some(index) = self.selected {
+        if enter && let Some(index) = self.selected() {
             self.request_play(index);
+        }
+        if select_all {
+            self.select_all_tracks();
+        }
+        if escape && self.selection.len() > 1 {
+            // Collapse a multi-selection back to just the anchor.
+            if let Some(anchor) = self.selected() {
+                self.selection.select_only(anchor);
+            }
         }
         if remove {
             self.remove_selected();
@@ -815,7 +900,7 @@ impl QinipApp {
         }
 
         self.playing_track = Some(next);
-        self.selected = Some(next);
+        self.selection.select_only(next);
         self.last_listen_at = None;
         self.autoplay_preloaded = false;
         self.clear_loop();
@@ -859,9 +944,11 @@ impl QinipApp {
             }
         });
 
-        if let Some(folder) = folders.into_iter().next() {
+        // Every dropped folder becomes its own group; loose files come after.
+        for folder in folders {
             self.load_folder(folder);
-        } else if !files.is_empty() {
+        }
+        if !files.is_empty() {
             self.load_paths(files);
         }
     }
@@ -975,7 +1062,7 @@ impl QinipApp {
     }
 
     fn draw_waveform(&mut self, ui: &mut egui::Ui) {
-        let index = match self.playing_track.or(self.selected) {
+        let index = match self.playing_track.or(self.selected()) {
             Some(i) => i,
             None => return,
         };
@@ -1079,7 +1166,8 @@ impl QinipApp {
 
     fn draw_title_cell(&self, ui: &mut egui::Ui, index: usize, width: f32) -> egui::Response {
         let track = &self.playlist.tracks[index];
-        let selected = self.selected == Some(index);
+        let selected = self.selection.contains(index);
+        let is_anchor = self.selected() == Some(index);
         let playing = self.playing_track == Some(index);
         let label = if playing {
             format!("▶ {}", track.title)
@@ -1113,10 +1201,19 @@ impl QinipApp {
         painter.rect_filled(filled, 3.0, fill);
 
         if selected {
+            // Members of a multi-selection get an amber wash; the anchor row
+            // keeps the crisp white outline so the focused track stays obvious.
+            let amber = egui::Color32::from_rgb(0xE8, 0xA9, 0x3C);
+            painter.rect_filled(rect, 3.0, amber.gamma_multiply(0.18));
+            let (stroke_w, stroke_color) = if is_anchor {
+                (1.5, egui::Color32::WHITE)
+            } else {
+                (1.0, amber)
+            };
             painter.rect_stroke(
                 rect,
                 3.0,
-                egui::Stroke::new(1.5, egui::Color32::WHITE),
+                egui::Stroke::new(stroke_w, stroke_color),
                 egui::StrokeKind::Inside,
             );
         }
@@ -1427,8 +1524,30 @@ impl eframe::App for QinipApp {
 
                             ui.end_row();
 
+                            // Folder separators: only meaningful in load-order view
+                            // (sorting interleaves folders), and only worth the noise
+                            // when more than one source is loaded.
+                            let show_groups =
+                                sort_state.is_none() && self.playlist.distinct_source_count() > 1;
+                            let mut prev_source: Option<Option<&Path>> = None;
+
                             for index in 0..self.playlist.tracks.len() {
                                 let track = &self.playlist.tracks[index];
+
+                                if show_groups {
+                                    let source = track.source_folder.as_deref();
+                                    if prev_source != Some(source) {
+                                        let count = self
+                                            .playlist
+                                            .tracks
+                                            .iter()
+                                            .filter(|t| t.source_folder.as_deref() == source)
+                                            .count();
+                                        draw_folder_header(ui, source, count);
+                                        ui.end_row();
+                                        prev_source = Some(source);
+                                    }
+                                }
 
                                 playlist_cell_label(ui, track.track_number_label(), cols.track_num);
                                 playlist_cell_label(ui, &track.artist, cols.artist);
@@ -1437,7 +1556,8 @@ impl eframe::App for QinipApp {
                                 if response.double_clicked() {
                                     pending_play = Some(index);
                                 } else if response.clicked() {
-                                    pending_select = Some(index);
+                                    let modifiers = ui.input(|i| i.modifiers);
+                                    pending_select = Some((index, modifiers));
                                 }
                                 response.context_menu(|ui| {
                                     if ui.button("Play").clicked() {
@@ -1522,8 +1642,8 @@ impl eframe::App for QinipApp {
             }
             if let Some(index) = pending_play {
                 self.request_play(index);
-            } else if let Some(index) = pending_select {
-                self.select_track(index);
+            } else if let Some((index, modifiers)) = pending_select {
+                self.click_track(index, modifiers);
             }
             if let Some(index) = pending_remove {
                 self.remove_from_playlist(index);
@@ -1548,6 +1668,28 @@ impl eframe::App for QinipApp {
 struct ColumnHeaderResult {
     sort_clicked: bool,
     width: f32,
+}
+
+/// A group header row for one source folder (or the loose-files group).
+/// egui's Grid has no colspan, so the label sits in the first cell and the
+/// caller ends the row; the amber rule underneath reads as a separator.
+fn draw_folder_header(ui: &mut egui::Ui, source: Option<&Path>, count: usize) {
+    let amber = egui::Color32::from_rgb(0xE8, 0xA9, 0x3C);
+    let name = match source {
+        Some(folder) => Playlist::source_folder_label(folder),
+        None => "Dropped files".to_string(),
+    };
+    let text = format!("📁 {name}  ·  {count}");
+    let full_path = source.map(|p| p.display().to_string()).unwrap_or_default();
+
+    let resp = ui.add(
+        egui::Label::new(egui::RichText::new(text).color(amber).strong())
+            .selectable(false)
+            .wrap_mode(egui::TextWrapMode::Extend),
+    );
+    if !full_path.is_empty() {
+        resp.on_hover_text(full_path);
+    }
 }
 
 /// Click the label to cycle sort (asc → desc → none). Drag the right edge to resize.

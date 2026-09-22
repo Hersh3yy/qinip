@@ -4,6 +4,7 @@ pub mod bands;
 pub mod bpm;
 pub mod key;
 pub mod playlist;
+pub mod selection;
 pub mod playback;
 pub mod worker;
 pub mod app;

@@ -30,13 +30,18 @@ pub struct TrackEntry {
     pub played: bool,
     /// Original append order — used to restore "no sort" view.
     pub load_order: u32,
+    /// The folder this track was loaded from (via Load Folder / folder drop).
+    /// `None` for loose files dropped onto the window. Drives the folder
+    /// separators shown in the load-order view.
+    pub source_folder: Option<PathBuf>,
 }
 
 impl TrackEntry {
-    pub fn from_path(path: PathBuf, load_order: u32) -> Self {
+    pub fn from_path(path: PathBuf, load_order: u32, source_folder: Option<PathBuf>) -> Self {
         let meta = probe_metadata(&path);
         Self {
             path,
+            source_folder,
             title: meta.title,
             artist: meta.artist,
             track_number: meta.track_number,
@@ -190,11 +195,39 @@ impl Playlist {
             .collect();
 
         paths.sort();
-        self.append_paths(paths)
+        self.append_with_source(paths, Some(folder.to_path_buf()))
     }
 
-    /// Append file paths. Skips duplicates. Returns how many were added.
+    /// Append loose file paths (no source folder). Skips duplicates.
+    /// Returns how many were added.
     pub fn append_paths(&mut self, paths: impl IntoIterator<Item = PathBuf>) -> usize {
+        self.append_with_source(paths, None)
+    }
+
+    /// Human label for a source folder header: the folder's own name.
+    pub fn source_folder_label(folder: &Path) -> String {
+        folder
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("folder")
+            .to_string()
+    }
+
+    /// How many distinct source folders (counting "loose files" as one) the
+    /// playlist spans. Separators are only worth drawing when this is > 1.
+    pub fn distinct_source_count(&self) -> usize {
+        self.tracks
+            .iter()
+            .map(|t| t.source_folder.as_deref())
+            .collect::<HashSet<_>>()
+            .len()
+    }
+
+    fn append_with_source(
+        &mut self,
+        paths: impl IntoIterator<Item = PathBuf>,
+        source_folder: Option<PathBuf>,
+    ) -> usize {
         let existing: HashSet<PathBuf> = self.tracks.iter().map(|t| t.path.clone()).collect();
         let mut paths: Vec<PathBuf> = paths
             .into_iter()
@@ -211,7 +244,7 @@ impl Playlist {
         self.tracks.extend(paths.into_iter().map(|path| {
             let order = self.next_load_order;
             self.next_load_order += 1;
-            TrackEntry::from_path(path, order)
+            TrackEntry::from_path(path, order, source_folder.clone())
         }));
         added
     }
