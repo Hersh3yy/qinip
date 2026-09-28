@@ -93,7 +93,11 @@ pub struct QinipApp {
     playlist_columns: PlaylistColumns,
     /// True once we've queued the upcoming track for gapless autoplay.
     autoplay_preloaded: bool,
-    system_media: SystemMedia,
+    /// `None` if the OS media-controls integration failed to start; the app
+    /// works fine without it (no media keys / Now Playing).
+    system_media: Option<SystemMedia>,
+    /// Set when there is no usable audio output; drives the banner + Retry.
+    audio_error: Option<String>,
     /// Active beat loop size (2/4/8/16), if any.
     loop_beats: Option<u32>,
     loop_start_secs: f64,
@@ -111,9 +115,22 @@ impl QinipApp {
 
         crate::macos_icon::set_dock_icon();
 
-        let playback = PlaybackEngine::new().expect("failed to start audio output");
-        let system_media =
-            SystemMedia::new(cc.egui_ctx.clone()).expect("failed to init system media controls");
+        // Never crash at launch over audio: a Mac with no output device (or a
+        // Bluetooth device mid-switch) gets a silent engine and a Retry banner.
+        let (playback, audio_error) = match PlaybackEngine::new() {
+            Ok(engine) => (engine, None),
+            Err(err) => {
+                dev::log(format!("audio output failed: {err}"));
+                (PlaybackEngine::silent(), Some(err.to_string()))
+            }
+        };
+        let system_media = match SystemMedia::new(cc.egui_ctx.clone()) {
+            Ok(media) => Some(media),
+            Err(err) => {
+                dev::log(format!("system media controls unavailable: {err}"));
+                None
+            }
+        };
         let (worker, updates_rx) = AnalysisWorker::spawn();
         let (analysis_tx, analysis_rx) = mpsc::channel();
 
@@ -140,6 +157,7 @@ impl QinipApp {
             playlist_columns: PlaylistColumns::default(),
             autoplay_preloaded: false,
             system_media,
+            audio_error,
             loop_beats: None,
             loop_start_secs: 0.0,
             loop_end_secs: 0.0,
@@ -624,7 +642,7 @@ impl QinipApp {
             return;
         }
 
-        match std::fs::rename(&old_path, &new_path) {
+        match file_ops::move_file(&old_path, &new_path) {
             Ok(()) => {
                 if let Some(audio) = self.audio_cache.remove(&old_path) {
                     self.audio_cache.insert(new_path.clone(), audio);
@@ -740,6 +758,25 @@ impl QinipApp {
         dev::log(format!("{beats}-beat loop: {start:.3}s..{end:.3}s"));
     }
 
+    /// Try to open the audio output again (after plugging in headphones etc.).
+    fn retry_audio_output(&mut self) {
+        match PlaybackEngine::new() {
+            Ok(engine) => {
+                self.playback = engine;
+                let _ = self.playback.set_volume(self.volume);
+                let _ = self.playback.set_eq(self.eq);
+                self.playing_track = None;
+                self.audio_error = None;
+                self.status_message = "Audio output connected.".to_string();
+                dev::log("audio output reconnected");
+            }
+            Err(err) => {
+                self.audio_error = Some(err.to_string());
+                self.status_message = format!("Still no audio output: {err}");
+            }
+        }
+    }
+
     fn sync_system_media(&mut self) {
         let status = self.playback.status();
         let (title, artist) = self
@@ -749,12 +786,18 @@ impl QinipApp {
             .unwrap_or(("Qinip", ""));
 
         let duration = status.duration_secs();
-        self.system_media.set_metadata(title, artist, duration);
-        self.system_media.set_playback(status.is_playing(), status.position_secs(), duration);
+        let Some(media) = self.system_media.as_mut() else {
+            return;
+        };
+        media.set_metadata(title, artist, duration);
+        media.set_playback(status.is_playing(), status.position_secs(), duration);
     }
 
     fn poll_system_media(&mut self) {
-        let events = self.system_media.poll();
+        let Some(media) = self.system_media.as_mut() else {
+            return;
+        };
+        let events = media.poll();
         for event in events {
             match event {
                 MediaControlEvent::Play => {
@@ -1325,6 +1368,22 @@ impl eframe::App for QinipApp {
             if !open {
                 self.confirm_delete = None;
             }
+        }
+
+        if let Some(err) = self.audio_error.clone() {
+            egui::Panel::top("audio_banner").show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "No audio output ({err}). Connect speakers or headphones, then retry."
+                        ))
+                        .color(egui::Color32::from_rgb(0xE8, 0xA9, 0x3C)),
+                    );
+                    if ui.button("Retry audio").clicked() {
+                        self.retry_audio_output();
+                    }
+                });
+            });
         }
 
         egui::Panel::top("top_bar").show(ui, |ui| {

@@ -143,9 +143,11 @@ cargo run --release
 Package installers locally:
 
 ```bash
-bash scripts/package-macos.sh    # → target/release/bundle/osx/Qinip.app
+bash scripts/package-macos.sh    # → target/release/bundle/{osx/Qinip.app, Qinip-<version>.dmg, qinip-macos-arm64.zip}
 bash scripts/package-windows.sh  # → target/release/qinip-windows-x64.zip (on Windows)
 ```
+
+A plain run is ad-hoc signed (fine on your own Mac). For a signed + notarized release, set `SIGN_IDENTITY` and `NOTARY_PROFILE`; the header of `scripts/package-macos.sh` explains both.
 
 Architecture, roadmap, and dev notes live in [`PROJECT.md`](./PROJECT.md).
 

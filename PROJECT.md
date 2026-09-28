@@ -14,7 +14,7 @@
 **Repo** · git@github.com:Hersh3yy/qinip.git · working on `feat/multiselect-folders-media` (merge to `master` only when sure)
 **Hosting** · Desktop app. Distributed as GitHub Releases (`Qinip.app` zip for macOS arm64, `Qinip.exe` zip for Windows x64).
 **ClickUp** · not linked
-**Last assessed** · 2026-09-22
+**Last assessed** · 2026-09-28
 
 ---
 
@@ -38,10 +38,8 @@ v1.0.0 is real and used: load folders of MP3s, sortable playlist, per-band colou
 
 | Sev | Issue | Where |
 |---|---|---|
-| serious | Release is ad-hoc signed (`-s -`), no hardened runtime, no notarization. Gatekeeper will block it for strangers; the script even tells users to `xattr -cr`. Needs Developer ID + notarytool + stapler. | `scripts/package-macos.sh:88` |
+| serious | Pipeline is ready but no Developer ID cert exists yet, so builds are still ad-hoc. Blocked on Apple Developer enrollment (Hiren). | `scripts/package-macos.sh` |
 | serious | System play/pause / media keys: wiring is correct in code, but macOS only routes media keys to a bundled, registered Now Playing app. Untested by a human in `Qinip.app`. Verify in the bundle; if it still fails there, dig into souvlaki registration. | `src/media.rs`, `src/app.rs` (`poll_system_media`) |
-| serious | App panics at startup with no audio output device (`PlaybackEngine::new().expect`). Headless or Bluetooth-mid-switch Macs get a crash report, not a window. | `src/app.rs` (`QinipApp::new`), `src/playback.rs:87` |
-| warning | `move_to_folder` uses `fs::rename`, which fails across volumes (USB stick / external SSD). Needs copy-then-remove fallback. | `src/app.rs` (`move_to_folder`) |
 | warning | `playing_track` / `confirm_delete` are still raw indices that get hand-shifted on remove/sort (selection now goes through `Selection::remap`). A `TrackId` would delete that code. | `src/app.rs` (`remove_from_playlist`) |
 | warning | Resampling runs on the UI thread on Load when device rate ≠ file rate (the 44.1/48 kHz norm). Tens of ms stall per track. | `src/playback.rs:294` |
 | note | Worker polls with a 20 ms sleep instead of blocking on `recv()`. | `src/worker.rs:75` |
@@ -128,10 +126,11 @@ Release is next week. Order is risk reduced per hour; full detail per item in `d
 - [x] Multi-folder / folder+file drop loads everything. <!-- id:n4 -->
 - [x] Feature branch + WIP committed as a fallback point. <!-- id:n5 -->
 - [ ] Hiren test-drives the new selection UX and folder headers in the bundle; adjust by feel. <!-- id:n6 -->
-- [ ] Trustworthy macOS release: enroll Developer Program, Developer ID Application cert, `codesign --options runtime --timestamp` with empty entitlements, `notarytool submit --wait`, `stapler staple`, `spctl --assess`; ship as dmg or stapled zip; delete the `xattr -cr` advice. <!-- id:r1 -->
-- [ ] Same in CI: signing secrets + notarize/staple in `.github/workflows/release.yml` so a tag produces a notarized artifact. <!-- id:r2 -->
-- [ ] Don't panic on missing audio device: `playback: Option<PlaybackEngine>` + banner + retry. <!-- id:r3 -->
-- [ ] `move_to_folder`: copy-then-remove fallback when `rename` crosses volumes. <!-- id:r4 -->
+- [x] Release pipeline: `package-macos.sh` does Developer ID + hardened runtime + notarize + staple + dmg when `SIGN_IDENTITY` / `NOTARY_PROFILE` are set, ad-hoc otherwise; empty `scripts/qinip.entitlements`. <!-- id:r1 -->
+- [x] CI: `release.yml` imports the cert and notary key from secrets when present, uploads dmg + zip. <!-- id:r2 -->
+- [ ] Hiren: enroll Apple Developer Program, make the Developer ID Application cert, `notarytool store-credentials`, run the script once with both vars, then add the 6 GitHub secrets. <!-- id:r1b -->
+- [x] No startup panic without audio output: silent engine + "Retry audio" banner; media controls optional. <!-- id:r3 -->
+- [x] `move_to_folder` uses `file_ops::move_file` (copy-then-remove fallback across volumes, tested). <!-- id:r4 -->
 - [ ] `TrackId` identity for `playing_track` / `confirm_delete`; delete the index-shifting code. <!-- id:r6 -->
 - [ ] Unit tests for `remove_from_playlist`, `compare_tracks`, `beat_in_bar`, `resample_interleaved`. <!-- id:r7 -->
 
@@ -150,6 +149,13 @@ Release is next week. Order is risk reduced per hour; full detail per item in `d
 ## Diary
 
 <!-- Newest first. One entry per working session. Terse, factual, honest. Append only. -->
+
+### 2026-09-28 — release pipeline, crash-proofing
+- r3: `PlaybackEngine::silent()` + `has_output()`; `play()` refuses in silent mode. App starts with a "Retry audio" banner instead of panicking; `SystemMedia` is now `Option`.
+- r4: `file_ops::move_file` (rename, then copy + size check + remove on `CrossesDevices`; copy is rolled back if the original can't be removed). 2 tests. Not exercised on a real second volume, unit tests only.
+- r1/r2: rewrote `scripts/package-macos.sh` (Developer ID + hardened runtime + notarytool + stapler + spctl when env vars set; ad-hoc fallback; dmg with Applications link; version/build number from Cargo.toml and commit count; `MACOSX_DEPLOYMENT_TARGET=11.0`). Added empty `scripts/qinip.entitlements`. CI imports cert/notary key from secrets when present.
+- Fixed a latent CI break: Windows job copied the deleted `USER_MANUAL.md`.
+- `cargo test` 6/6. Built, installed to `~/Applications`, launched; process stays up. No Developer ID identity on this Mac yet, so still ad-hoc.
 
 ### 2026-09-22 (later) — built the three features, release audit
 - Green light received. Branch `feat/multiselect-folders-media` off `master`; committed the pre-existing souvlaki/transport WIP as `ab1bbe6` (fallback point), untracked `.DS_Store`.

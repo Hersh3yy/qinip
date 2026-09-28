@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Hardened-runtime entitlements for Qinip. Deliberately empty.
+  Rust is ahead-of-time compiled and the Metal (wgpu) + CoreAudio (cpal)
+  backends generate no code at runtime, so no allow-jit /
+  allow-unsigned-executable-memory. Output-only audio needs no
+  device.audio-input. Nothing is loaded dynamically, so no
+  disable-library-validation. Add an entitlement only when the
+  notarization log names one as missing.
+-->
+<plist version="1.0">
+<dict/>
+</plist>

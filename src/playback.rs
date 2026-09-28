@@ -80,7 +80,9 @@ pub struct PlaybackEngine {
     cmd_rx: mpsc::Receiver<PlaybackCommand>,
     cmd_tx: mpsc::Sender<PlaybackCommand>,
     status: Arc<PlaybackStatus>,
-    _stream: cpal::Stream,
+    /// `None` in silent mode (no output device at startup). The engine still
+    /// accepts every command so the UI keeps working; nothing is heard.
+    stream: Option<cpal::Stream>,
 }
 
 impl PlaybackEngine {
@@ -100,38 +102,7 @@ impl PlaybackEngine {
             "audio output: {output_sample_rate} Hz | {output_channels} channels"
         ));
 
-        let eq_channels: Vec<LiveEq> = (0..output_channels.max(1))
-            .map(|_| LiveEq::new(output_sample_rate))
-            .collect();
-
-        let unity = EqGains::default();
-        let shared = Arc::new(SharedPlayback {
-            track: Mutex::new(None),
-            next_track: Mutex::new(None),
-            auto_advanced: AtomicBool::new(false),
-            eq: Mutex::new(eq_channels),
-            playhead_frame: AtomicU64::new(0),
-            duration_frames: AtomicU64::new(0),
-            sample_rate: AtomicU64::new(output_sample_rate as u64),
-            playing: AtomicBool::new(false),
-            volume: AtomicU32::new(0.85f32.to_bits()),
-            eq_low: AtomicU32::new(unity.low.to_bits()),
-            eq_low_mid: AtomicU32::new(unity.low_mid.to_bits()),
-            eq_hi_mid: AtomicU32::new(unity.hi_mid.to_bits()),
-            eq_hi: AtomicU32::new(unity.hi.to_bits()),
-            output_channels,
-            output_sample_rate,
-            loop_active: AtomicBool::new(false),
-            loop_start_frame: AtomicU64::new(0),
-            loop_end_frame: AtomicU64::new(0),
-        });
-
-        let status = Arc::new(PlaybackStatus {
-            playhead_frame: AtomicU64::new(0),
-            duration_frames: AtomicU64::new(0),
-            sample_rate: AtomicU64::new(output_sample_rate as u64),
-            playing: AtomicBool::new(false),
-        });
+        let (shared, status) = Self::shared_state(output_channels, output_sample_rate);
 
         let shared_cb = Arc::clone(&shared);
         let status_cb = Arc::clone(&status);
@@ -179,15 +150,75 @@ impl PlaybackEngine {
         stream.play()?;
         dev::log("cpal output stream started");
 
-        let (cmd_tx, cmd_rx) = mpsc::channel();
+        Ok(Self::from_parts(shared, status, Some(stream)))
+    }
 
-        Ok(Self {
+    /// An engine with no output stream, used when `new()` fails (no device,
+    /// unsupported format). Commands are accepted and state is tracked, but
+    /// `play()` is refused so the UI never shows a "playing" track that is silent.
+    pub fn silent() -> Self {
+        let (shared, status) = Self::shared_state(2, 44_100);
+        dev::log("audio output unavailable, running silent");
+        Self::from_parts(shared, status, None)
+    }
+
+    pub fn has_output(&self) -> bool {
+        self.stream.is_some()
+    }
+
+    fn from_parts(
+        shared: Arc<SharedPlayback>,
+        status: Arc<PlaybackStatus>,
+        stream: Option<cpal::Stream>,
+    ) -> Self {
+        let (cmd_tx, cmd_rx) = mpsc::channel();
+        Self {
             shared,
             cmd_rx,
             cmd_tx,
             status,
-            _stream: stream,
-        })
+            stream,
+        }
+    }
+
+    fn shared_state(
+        output_channels: usize,
+        output_sample_rate: u32,
+    ) -> (Arc<SharedPlayback>, Arc<PlaybackStatus>) {
+        let eq_channels: Vec<LiveEq> = (0..output_channels.max(1))
+            .map(|_| LiveEq::new(output_sample_rate))
+            .collect();
+
+        let unity = EqGains::default();
+        let shared = Arc::new(SharedPlayback {
+            track: Mutex::new(None),
+            next_track: Mutex::new(None),
+            auto_advanced: AtomicBool::new(false),
+            eq: Mutex::new(eq_channels),
+            playhead_frame: AtomicU64::new(0),
+            duration_frames: AtomicU64::new(0),
+            sample_rate: AtomicU64::new(output_sample_rate as u64),
+            playing: AtomicBool::new(false),
+            volume: AtomicU32::new(0.85f32.to_bits()),
+            eq_low: AtomicU32::new(unity.low.to_bits()),
+            eq_low_mid: AtomicU32::new(unity.low_mid.to_bits()),
+            eq_hi_mid: AtomicU32::new(unity.hi_mid.to_bits()),
+            eq_hi: AtomicU32::new(unity.hi.to_bits()),
+            output_channels,
+            output_sample_rate,
+            loop_active: AtomicBool::new(false),
+            loop_start_frame: AtomicU64::new(0),
+            loop_end_frame: AtomicU64::new(0),
+        });
+
+        let status = Arc::new(PlaybackStatus {
+            playhead_frame: AtomicU64::new(0),
+            duration_frames: AtomicU64::new(0),
+            sample_rate: AtomicU64::new(output_sample_rate as u64),
+            playing: AtomicBool::new(false),
+        });
+
+        (shared, status)
     }
 
     pub fn poll(&self) {
@@ -241,6 +272,9 @@ impl PlaybackEngine {
     }
 
     pub fn play(&self) -> anyhow::Result<()> {
+        if !self.has_output() {
+            anyhow::bail!("no audio output device");
+        }
         self.cmd_tx.send(PlaybackCommand::Play)?;
         Ok(())
     }
