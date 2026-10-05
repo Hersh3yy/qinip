@@ -1017,12 +1017,11 @@ impl QinipApp {
 
         ctx.input(|input| {
             for dropped in &input.raw.dropped_files {
-                if let Some(path) = &dropped.path {
-                    if path.is_dir() {
-                        folders.push(path.clone());
-                    } else {
-                        files.push(path.clone());
-                    }
+                let path = dropped.path();
+                if path.is_dir() {
+                    folders.push(path.to_path_buf());
+                } else {
+                    files.push(path.to_path_buf());
                 }
             }
         });
