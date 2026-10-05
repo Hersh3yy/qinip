@@ -14,7 +14,7 @@
 **Repo** · git@github.com:Hersh3yy/qinip.git · working on `feat/multiselect-folders-media` (merge to `master` only when sure)
 **Hosting** · Desktop app. Distributed as GitHub Releases (`Qinip.app` zip for macOS arm64, `Qinip.exe` zip for Windows x64).
 **ClickUp** · not linked
-**Last assessed** · 2026-09-28
+**Last assessed** · 2026-10-05
 
 ---
 
@@ -133,6 +133,14 @@ Release is next week. Order is risk reduced per hour; full detail per item in `d
 - [x] `move_to_folder` uses `file_ops::move_file` (copy-then-remove fallback across volumes, tested). <!-- id:r4 -->
 - [ ] `TrackId` identity for `playing_track` / `confirm_delete`; delete the index-shifting code. <!-- id:r6 -->
 - [ ] Unit tests for `remove_from_playlist`, `compare_tracks`, `beat_in_bar`, `resample_interleaved`. <!-- id:r7 -->
+- [x] GPL-3.0-or-later LICENSE, About window, `THIRD_PARTY_LICENSES.html` via cargo-about, shipped in the bundle and Windows zip. <!-- id:p1 -->
+- [x] Auto tag-writing is opt-in (off by default); settings persist via eframe storage. <!-- id:p2 -->
+- [x] Transport button and Bar readout clipping fixed; volume fader + mute next to transport. <!-- id:p3 -->
+- [ ] Hiren checks the new transport row, volume fader and About window by eye. <!-- id:p4 -->
+- [ ] CHANGELOG.md (keepachangelog) + bump to 1.1.0 for the first public release. <!-- id:p5 -->
+- [ ] "New version available" check: fetch `latest.json` from Hiren's site on launch, dismissable banner, off-switch, privacy note updated. <!-- id:p6 -->
+- [ ] Download page on Hiren's site: per-OS buttons, version, size, SHA-256, min OS, changelog, uninstall steps, license + source link. <!-- id:p7 -->
+- [ ] Windows: real installer + uninstaller (prototype Velopack), OV Authenticode cert, test on a real Windows machine. <!-- id:p8 -->
 
 ## Roadmap — far future
 
@@ -142,13 +150,25 @@ Release is next week. Order is risk reduced per hour; full detail per item in `d
 - [ ] Windows: Authenticode signing (OV cert, e.g. Certum) + verify souvlaki with a real `hwnd`. <!-- id:f1 -->
 - [ ] Persist playlist / session between launches. <!-- id:f2 -->
 - [ ] Non-MP3 formats (FLAC/WAV/AAC) via symphonia's other decoders. <!-- id:f3 -->
-- [ ] Package-currency pass: `cargo outdated`, patch/minor + security bumps behind the build check; `cargo clippy --fix --lib` for the 6 auto-fixable warnings. <!-- id:f4 -->
+- [x] Package-currency pass: `cargo update` (patch/minor), egui/eframe 0.36, Rust 1.99, clippy auto-fixes. <!-- id:f4 -->
+- [ ] symphonia 0.5 to 0.6: breaking decode API; do it after release, behind the decode tests. <!-- id:f5 -->
+- [ ] souvlaki 0.8.3 pulls `block 0.1.6` (old `cocoa`), which a future Rust will reject. Watch for a souvlaki release or patch it. <!-- id:f6 -->
+- [ ] Beat-synced Bar counter / metronome: today's counter assumes beat 1 at 0:00, so it drifts from the music on most tracks. Needs a beat grid (first-downbeat offset from aubio onsets), then the counter and a click track can follow it. <!-- id:f7 -->
+- [ ] Velopack auto-update (replaces the p6 banner with in-app updates). <!-- id:f8 -->
 
 ---
 
 ## Diary
 
 <!-- Newest first. One entry per working session. Terse, factual, honest. Append only. -->
+
+### 2026-10-05 — license, opt-in tag writes, deps, transport UI
+- Licensed GPL-3.0-or-later (aubio is GPL-3.0 and statically compiled in). LICENSE, Cargo metadata, About window, `THIRD_PARTY_LICENSES.html` (cargo-about config in `scripts/licenses/`), both shipped in the .app Resources and the Windows zip.
+- Auto tag-writing after analysis is now opt-in, off by default (`spawn_analysis` was silently editing users' MP3s). Toggle in the top bar. Settings struct persisted with eframe `persistence` (volume, autoplay, tag opt-in).
+- Deps: `cargo update` patch/minor; Rust 1.93 to 1.99; egui/eframe 0.35 to 0.36 (one fix: `DroppedFile::path()` is a method now); clippy `--fix`. Held back: symphonia 0.6 (breaking, f5). souvlaki drags in `block 0.1.6` future-incompat (f6).
+- Transport: buttons were clipped because the glow ring sat outside the 40px rect; now 36px with the cap sized to leave room for the ring. Bar readout BPM text was drawn below its rect; rect made taller. Volume moved from the bottom bar to a fader + mute next to transport.
+- Metronome / beat-synced bar counter parked as f7 (next phase; needs a beat grid).
+- Tests 6/6, release build clean, packaged, installed and launched. Could not screenshot the window from the session (no screen-recording permission), so the visual result is unverified by me.
 
 ### 2026-09-28 — release pipeline, crash-proofing
 - r3: `PlaybackEngine::silent()` + `has_output()`; `play()` refuses in silent mode. App starts with a "Retry audio" banner instead of panicking; `SystemMedia` is now `Option`.

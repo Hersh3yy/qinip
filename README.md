@@ -86,7 +86,7 @@ Then right-click → Open → Open.
 | **Remove from playlist** | Drop from the list only (file stays on disk) |
 | **Open enclosing folder** | Opens the containing folder in Finder / Explorer |
 | **Move to folder…** | Pick a destination; moves the MP3 on disk and updates the playlist path |
-| **Write BPM/Key tags** | Writes analysis into the file's ID3 tags (`TBPM`, `TKEY`) — requires analysis finished |
+| **Write BPM/Key tags** | Writes analysis into the file's ID3 tags (`TBPM`, `TKEY`), only filling missing tags. Requires analysis finished |
 | **Delete from disk…** | Permanently deletes the MP3 after a confirm dialog — **cannot be undone** |
 
 ### Columns
@@ -108,7 +108,7 @@ Hover the title to see the original filename.
 
 - **Transport buttons** (beside the EQ knobs): Previous · Play/Pause · Next · Stop · ±10s seek.
 - **Seek bar** (bottom): drag to jump in time.
-- **Vol**: master volume.
+- **Volume** (right of the transport buttons): fader with % readout; the speaker button mutes and unmutes. Volume is remembered between launches.
 - **Autoplay**: when on, plays the next playlist row after the current track finishes (gapless when the next file is already decoded), but only if that track was "played" (≥ 20s listened).
 
 ### Waveform & EQ
@@ -123,6 +123,10 @@ Qinip writes `TBPM` and `TKEY` into the MP3. **macOS Finder Get Info doesn't sho
 
 - Use **Mp3tag**, **Rekordbox**, or **Serato**, or
 - Terminal: `id3info yourtrack.mp3 | grep -E 'TBPM|TKEY'`
+
+### Your files are left alone
+
+Qinip only reads your MP3s, unless you ask it to change them. Writing BPM/Key into the files happens only through right-click → **Write BPM/Key tags**, or automatically if you tick **Write BPM/Key to files** in the top bar (off by default). Even then it only fills tags that are missing and never overwrites existing ones. Settings (volume, autoplay, this toggle) are remembered between launches.
 
 ### Not yet in Qinip
 
@@ -152,6 +156,10 @@ A plain run is ad-hoc signed (fine on your own Mac). For a signed + notarized re
 Architecture, roadmap, and dev notes live in [`PROJECT.md`](./PROJECT.md).
 
 ---
+
+## License
+
+Qinip is free software under the [GNU General Public License v3.0 or later](./LICENSE). BPM and key detection is done by [aubio](https://aubio.org) (GPL-3.0). Licenses of all bundled open-source libraries are in [`assets/THIRD_PARTY_LICENSES.html`](./assets/THIRD_PARTY_LICENSES.html), which also ships inside the app. Click **About** in the app for the short version.
 
 ## Support
 
