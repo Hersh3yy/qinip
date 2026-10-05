@@ -2,6 +2,10 @@
 name = "qinip"
 version = "1.0.0"
 edition = "2024"
+description = "Free MP3 pack audition player: playlist, coloured waveform, EQ, BPM/key analysis."
+# GPL because aubio (BPM/key detection) is GPL-3.0 and is compiled into the binary.
+license = "GPL-3.0-or-later"
+repository = "https://github.com/Hersh3yy/qinip"
 default-run = "qinip"
 
 [package.metadata.bundle]
