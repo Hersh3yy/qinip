@@ -100,6 +100,8 @@ jobs:
           mkdir -p dist
           cp target/release/qinip.exe "dist/Qinip.exe"
           cp README.md dist/
+          cp LICENSE dist/LICENSE.txt
+          cp assets/THIRD_PARTY_LICENSES.html dist/
           cd dist
           7z a -tzip ../qinip-windows-x64.zip *
 

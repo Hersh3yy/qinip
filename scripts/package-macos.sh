@@ -74,6 +74,10 @@ if [ -f "$ICON_SRC" ]; then
   rm -rf "$ICONSET"
 fi
 
+# GPL-3.0 obliges shipping the license; MIT/Apache deps oblige their notices.
+cp "$REPO_ROOT/LICENSE" "$APP_DIR/Contents/Resources/LICENSE.txt"
+cp "$REPO_ROOT/assets/THIRD_PARTY_LICENSES.html" "$APP_DIR/Contents/Resources/"
+
 cat > "$APP_DIR/Contents/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

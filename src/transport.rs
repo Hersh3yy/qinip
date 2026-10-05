@@ -25,17 +25,20 @@ pub fn beat_bar_indicator(ui: &mut Ui, position_secs: f64, bpm: Option<f32>) {
     ui.vertical(|ui| {
         ui.label(RichText::new("Bar").small().weak());
         ui.horizontal(|ui| {
+            // Tall enough for the beat number above the BPM readout; ticks are
+            // inset by 1px so the lit tick's outside stroke isn't clipped.
             let (rect, _) = ui.allocate_exact_size(
-                Vec2::new(bar_w + 52.0, total_h.max(28.0)),
+                Vec2::new(bar_w + 52.0, total_h.max(BUTTON_SIZE) + 2.0),
                 Sense::hover(),
             );
+            let tick_top = rect.top() + 1.0 + (rect.height() - 2.0 - total_h) * 0.5;
             let painter = ui.painter_at(rect);
 
             let Some(bpm) = bpm.filter(|b| *b > 0.0) else {
                 for i in 0..4 {
-                    let y = rect.top() + i as f32 * (bar_h + gap);
+                    let y = tick_top + i as f32 * (bar_h + gap);
                     let tick = Rect::from_min_size(
-                        Pos2::new(rect.left(), y),
+                        Pos2::new(rect.left() + 1.0, y),
                         Vec2::new(bar_w, bar_h),
                     );
                     painter.rect_filled(tick, 1.0, dim);
@@ -54,9 +57,9 @@ pub fn beat_bar_indicator(ui: &mut Ui, position_secs: f64, bpm: Option<f32>) {
 
             for beat in 1..=4u8 {
                 let i = (beat - 1) as f32;
-                let y = rect.top() + i * (bar_h + gap);
+                let y = tick_top + i * (bar_h + gap);
                 let tick = Rect::from_min_size(
-                    Pos2::new(rect.left(), y),
+                    Pos2::new(rect.left() + 1.0, y),
                     Vec2::new(bar_w, bar_h),
                 );
                 let lit = beat == current;
@@ -74,14 +77,14 @@ pub fn beat_bar_indicator(ui: &mut Ui, position_secs: f64, bpm: Option<f32>) {
 
             let text_x = rect.left() + bar_w + 10.0;
             painter.text(
-                Pos2::new(text_x, rect.center().y - 6.0),
+                Pos2::new(text_x, rect.center().y - 7.0),
                 Align2::LEFT_CENTER,
                 current.to_string(),
-                FontId::proportional(20.0),
+                FontId::proportional(18.0),
                 Color32::WHITE,
             );
             painter.text(
-                Pos2::new(text_x, rect.center().y + 12.0),
+                Pos2::new(text_x, rect.center().y + 10.0),
                 Align2::LEFT_CENTER,
                 format!("{bpm:.1}"),
                 FontId::monospace(13.0),
@@ -91,6 +94,12 @@ pub fn beat_bar_indicator(ui: &mut Ui, position_secs: f64, bpm: Option<f32>) {
     });
 }
 
+/// Outer size of a transport button, glow ring included.
+const BUTTON_SIZE: f32 = 36.0;
+/// Room the glow ring needs outside the cap: ring gap (3.5) + lit halo (1.5)
+/// + half the halo stroke (0.5), so the lit ring ends exactly at the edge.
+const RING_ALLOWANCE: f32 = 5.5;
+
 /// Circular transport button. Returns `true` if clicked.
 pub fn transport_button(
     ui: &mut Ui,
@@ -99,7 +108,7 @@ pub fn transport_button(
     enabled: bool,
     active: bool,
 ) -> bool {
-    let size = Vec2::splat(40.0);
+    let size = Vec2::splat(BUTTON_SIZE);
     let sense = if enabled {
         Sense::click()
     } else {
@@ -114,7 +123,9 @@ pub fn transport_button(
 
     let painter = ui.painter_at(rect);
     let center = rect.center();
-    let radius = rect.width() * 0.44;
+    // Everything drawn must stay inside `rect` (painter_at clips to it), so
+    // the cap radius leaves room for the glow ring around it.
+    let radius = rect.width() * 0.5 - RING_ALLOWANCE;
 
     draw_glow_ring(&painter, center, radius, accent, active && enabled);
     draw_metal_cap(&painter, center, radius, enabled);
@@ -182,7 +193,7 @@ fn draw_button_label(painter: &egui::Painter, center: Pos2, label: &str, enabled
         center,
         egui::Align2::CENTER_CENTER,
         label,
-        egui::FontId::proportional(13.0),
+        egui::FontId::proportional(11.5),
         color,
     );
 }

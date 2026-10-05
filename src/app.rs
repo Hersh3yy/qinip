@@ -68,6 +68,30 @@ impl PlaylistColumns {
     }
 }
 
+/// User preferences that persist across launches (eframe storage, under
+/// ~/Library/Application Support/Qinip on macOS, %APPDATA%\Qinip on Windows).
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+struct Settings {
+    volume: f32,
+    autoplay: bool,
+    /// Opt-in: write analyzed BPM/Key into the MP3's ID3 tags automatically.
+    /// Off by default so Qinip never edits someone's files unasked.
+    auto_write_tags: bool,
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self {
+            volume: 0.85,
+            autoplay: true,
+            auto_write_tags: false,
+        }
+    }
+}
+
+const SETTINGS_KEY: &str = "qinip-settings";
+
 pub struct QinipApp {
     playlist: Playlist,
     playback: PlaybackEngine,
@@ -81,10 +105,14 @@ pub struct QinipApp {
     selection: Selection,
     playing_track: Option<usize>,
     volume: f32,
+    /// Volume to restore when un-muting via the speaker button.
+    volume_before_mute: f32,
     eq: EqGains,
     seek_slider: f64,
     status_message: String,
     autoplay: bool,
+    auto_write_tags: bool,
+    show_about: bool,
     was_playing: bool,
     last_listen_at: Option<f64>,
     /// When set, show a confirm dialog before deleting this playlist index from disk.
@@ -131,6 +159,13 @@ impl QinipApp {
                 None
             }
         };
+        let settings: Settings = cc
+            .storage
+            .and_then(|storage| eframe::get_value(storage, SETTINGS_KEY))
+            .unwrap_or_default();
+        let volume = settings.volume.clamp(0.0, 1.0);
+        let _ = playback.set_volume(volume);
+
         let (worker, updates_rx) = AnalysisWorker::spawn();
         let (analysis_tx, analysis_rx) = mpsc::channel();
 
@@ -145,11 +180,14 @@ impl QinipApp {
             waveform_cache: HashMap::new(),
             selection: Selection::default(),
             playing_track: None,
-            volume: 0.85,
+            volume,
+            volume_before_mute: volume,
             eq: EqGains::default(),
             seek_slider: 0.0,
             status_message: "Load a folder or drop MP3s to begin.".to_string(),
-            autoplay: true,
+            autoplay: settings.autoplay,
+            auto_write_tags: settings.auto_write_tags,
+            show_about: false,
             was_playing: false,
             last_listen_at: None,
             confirm_delete: None,
@@ -251,11 +289,13 @@ impl QinipApp {
     /// thread silently or, worse, the whole app.
     fn spawn_analysis(&self, path: PathBuf, audio: Arc<DecodedAudio>) {
         let tx = self.analysis_tx.clone();
+        // Only touch the file when the user opted in (top bar checkbox).
+        let write_tags = self.auto_write_tags;
         thread::spawn(move || {
             let start = std::time::Instant::now();
             let outcome = run_bpm_key_analysis(&audio);
             dev::log_timing(&format!("bpm+key {}", path.display()), start);
-            if let Ok((bpm, ref key)) = outcome {
+            if write_tags && let Ok((bpm, ref key)) = outcome {
                 match tags::write_analysis_tags(&path, bpm, key) {
                     Ok(true) => {
                         dev::log(format!("wrote missing BPM/Key tags: {}", path.display()));
@@ -1100,6 +1140,54 @@ impl QinipApp {
 
                 let position = self.playback.status().position_secs();
                 beat_bar_indicator(ui, position, self.current_bpm());
+
+                ui.separator();
+                self.draw_volume(ui);
+            });
+        });
+    }
+
+    /// Speaker button (mute toggle) + volume fader with a percentage readout.
+    fn draw_volume(&mut self, ui: &mut egui::Ui) {
+        ui.vertical(|ui| {
+            ui.label(egui::RichText::new("Volume").small().weak());
+            ui.horizontal(|ui| {
+                let muted = self.volume <= 0.001;
+                let icon = if muted { "🔇" } else { "🔊" };
+                let mut changed = false;
+                if ui
+                    .button(icon)
+                    .on_hover_text(if muted { "Unmute" } else { "Mute" })
+                    .clicked()
+                {
+                    if muted {
+                        self.volume = if self.volume_before_mute > 0.001 {
+                            self.volume_before_mute
+                        } else {
+                            0.85
+                        };
+                    } else {
+                        self.volume_before_mute = self.volume;
+                        self.volume = 0.0;
+                    }
+                    changed = true;
+                }
+
+                ui.spacing_mut().slider_width = 120.0;
+                if ui
+                    .add(
+                        egui::Slider::new(&mut self.volume, 0.0..=1.0)
+                            .custom_formatter(|v, _| format!("{:.0}%", v * 100.0))
+                            .trailing_fill(true),
+                    )
+                    .changed()
+                {
+                    changed = true;
+                }
+
+                if changed {
+                    let _ = self.playback.set_volume(self.volume);
+                }
             });
         });
     }
@@ -1285,6 +1373,18 @@ impl QinipApp {
 }
 
 impl eframe::App for QinipApp {
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        eframe::set_value(
+            storage,
+            SETTINGS_KEY,
+            &Settings {
+                volume: self.volume,
+                autoplay: self.autoplay,
+                auto_write_tags: self.auto_write_tags,
+            },
+        );
+    }
+
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.playback.poll();
         self.poll_worker();
@@ -1370,6 +1470,36 @@ impl eframe::App for QinipApp {
             }
         }
 
+        if self.show_about {
+            let mut open = true;
+            egui::Window::new("About Qinip")
+                .open(&mut open)
+                .collapsible(false)
+                .resizable(false)
+                .show(ui.ctx(), |ui| {
+                    ui.heading(format!("Qinip {}", env!("CARGO_PKG_VERSION")));
+                    ui.label("Free MP3 pack audition player.");
+                    ui.add_space(6.0);
+                    ui.label(
+                        "Qinip is free software under the GNU General Public License v3 \
+                         or later. You may use, share and change it. Source code:",
+                    );
+                    ui.hyperlink(env!("CARGO_PKG_REPOSITORY"));
+                    ui.add_space(6.0);
+                    ui.label(
+                        "BPM and key detection by aubio (GPL-3.0, aubio.org). Built with \
+                         egui, cpal, symphonia, souvlaki and other open-source crates. \
+                         Their licenses are in THIRD_PARTY_LICENSES.html, inside the \
+                         app's Resources folder and in the source repository.",
+                    );
+                    ui.add_space(6.0);
+                    ui.label(egui::RichText::new("Qinip makes no network connections.").weak());
+                });
+            if !open {
+                self.show_about = false;
+            }
+        }
+
         if let Some(err) = self.audio_error.clone() {
             egui::Panel::top("audio_banner").show(ui, |ui| {
                 ui.horizontal(|ui| {
@@ -1395,6 +1525,16 @@ impl eframe::App for QinipApp {
                 }
 
                 ui.checkbox(&mut self.autoplay, "Autoplay");
+                ui.checkbox(&mut self.auto_write_tags, "Write BPM/Key to files")
+                    .on_hover_text(
+                        "When on, Qinip writes the analyzed BPM and key into each MP3's \
+                         ID3 tags (only fills missing tags, never overwrites). Off by \
+                         default: your files are not changed unless you turn this on or \
+                         use right-click → Write BPM/Key tags.",
+                    );
+                if ui.button("About").clicked() {
+                    self.show_about = true;
+                }
 
                 ui.label(&self.status_message);
 
@@ -1428,15 +1568,6 @@ impl eframe::App for QinipApp {
                     let _ = self.playback.seek_secs(seek);
                 }
 
-                ui.separator();
-
-                ui.label("Vol");
-                if ui
-                    .add(egui::Slider::new(&mut self.volume, 0.0..=1.0).show_value(false))
-                    .changed()
-                {
-                    let _ = self.playback.set_volume(self.volume);
-                }
             });
         });
 

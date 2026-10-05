@@ -26,12 +26,14 @@ path = "src/bin/analyze.rs"
 
 [dependencies]
 anyhow = "1.0.103"
+serde = { version = "1", features = ["derive"] }
 # `builtin` compiles bundled aubio C sources; avoids Homebrew header layout mismatch
 # (`include/aubio/aubio.h` vs bindgen's `#include <aubio.h>`) on Apple Silicon.
 aubio-rs = { version = "0.2.0", features = ["bindgen", "builtin"] }
 biquad = "0.6.0"
 cpal = "0.18.1"
-eframe = "0.35.0"
+# `persistence`: settings (volume, autoplay, tag-write opt-in) survive restarts.
+eframe = { version = "0.35.0", features = ["persistence"] }
 egui = "0.35.0"
 id3 = "1.17.0"
 rfd = "0.17.2"
