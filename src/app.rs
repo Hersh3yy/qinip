@@ -908,14 +908,13 @@ impl QinipApp {
 
         if let Some(last) = self.last_listen_at {
             let dt = now - last;
-            if dt > 0.0 && dt < 1.0 {
-                if let Some(track) = self.playlist.tracks.get_mut(index) {
+            if dt > 0.0 && dt < 1.0
+                && let Some(track) = self.playlist.tracks.get_mut(index) {
                     track.mark_listened(dt);
                     if track.qualifies_as_played() {
                         self.was_playing = true;
                     }
                 }
-            }
         }
 
         self.last_listen_at = Some(now);
@@ -1286,12 +1285,11 @@ impl QinipApp {
             }
         }
 
-        if response.clicked() {
-            if let Some(pos) = response.interact_pointer_pos() {
+        if response.clicked()
+            && let Some(pos) = response.interact_pointer_pos() {
                 let fraction = ((pos.x - rect.left()) / width).clamp(0.0, 1.0) as f64;
                 self.seek_from_waveform_click(fraction);
             }
-        }
     }
 
     fn draw_title_cell(&self, ui: &mut egui::Ui, index: usize, width: f32) -> egui::Response {

@@ -52,10 +52,9 @@ pub fn to_camelot(key_name: &str) -> Option<String> {
     let key_name = key_name.trim();
     let (note, mode) = if let Some(note) = key_name.strip_suffix(" Major") {
         (note, 'B')
-    } else if let Some(note) = key_name.strip_suffix(" Minor") {
-        (note, 'A')
     } else {
-        return None;
+        let note = key_name.strip_suffix(" Minor")?;
+        (note, 'A')
     };
 
     let number = match (note, mode) {

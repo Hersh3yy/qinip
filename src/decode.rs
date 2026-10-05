@@ -238,8 +238,8 @@ pub fn probe_metadata(path: &Path) -> TrackMetadata {
     let mut track_number = None;
 
     // ID3 often lives on the probe metadata bag before the format demuxer.
-    if let Some(mut metadata) = probed.metadata.get() {
-        if let Some(rev) = metadata.skip_to_latest() {
+    if let Some(mut metadata) = probed.metadata.get()
+        && let Some(rev) = metadata.skip_to_latest() {
             absorb_tags(
                 rev.tags(),
                 &mut title,
@@ -248,7 +248,6 @@ pub fn probe_metadata(path: &Path) -> TrackMetadata {
                 &mut track_number,
             );
         }
-    }
 
     let mut format = probed.format;
     let track = format

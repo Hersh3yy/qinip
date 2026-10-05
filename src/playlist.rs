@@ -276,6 +276,12 @@ impl Playlist {
     }
 }
 
+impl Default for Playlist {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 fn compare_tracks(a: &TrackEntry, b: &TrackEntry, column: SortColumn) -> std::cmp::Ordering {
     use std::cmp::Ordering;
 

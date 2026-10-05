@@ -110,7 +110,7 @@ impl PlaybackEngine {
         let err_fn = |err| eprintln!("audio stream error: {err}");
         let stream = match sample_format {
             SampleFormat::F32 => device.build_output_stream(
-                stream_config.clone(),
+                stream_config,
                 move |data: &mut [f32], _| {
                     render_output_f32(data, &shared_cb, &status_cb);
                 },
@@ -125,7 +125,7 @@ impl PlaybackEngine {
             SampleFormat::I16 => {
                 let mut scratch: Vec<f32> = Vec::new();
                 device.build_output_stream(
-                    stream_config.clone(),
+                    stream_config,
                     move |data: &mut [i16], _| {
                         fill_from_f32_scratch(data, &mut scratch, &shared_cb, &status_cb);
                     },
