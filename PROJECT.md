@@ -5,6 +5,7 @@
   green light; the working branch is merged only when sure.
   Keep the section order and headings identical across every project.
 -->
+<!-- clickup_list:1200240000009527 -->
 
 # Qinip — cockpit
 
@@ -124,41 +125,41 @@ sequenceDiagram
 
 Release is next week. Order is risk reduced per hour; full detail per item in `docs/release-and-code-quality.md`.
 
-- [ ] Verify system play/pause in the packaged `Qinip.app` (media keys, Control Center, Bluetooth headphone button). If it fails there too, dig into souvlaki registration. <!-- id:n1 -->
-- [x] Multi-select + batch delete (Shift/Cmd click, Cmd+A, Esc, Backspace removes the set high→low). <!-- id:n2 -->
-- [x] Folder group headers in load-order view, driven by `TrackEntry::source_folder`. <!-- id:n3 -->
-- [x] Multi-folder / folder+file drop loads everything. <!-- id:n4 -->
-- [x] Feature branch + WIP committed as a fallback point. <!-- id:n5 -->
-- [ ] Hiren test-drives the new selection UX and folder headers in the bundle; adjust by feel. <!-- id:n6 -->
-- [x] Release pipeline: `package-macos.sh` does Developer ID + hardened runtime + notarize + staple + dmg when `SIGN_IDENTITY` / `NOTARY_PROFILE` are set, ad-hoc otherwise; empty `scripts/qinip.entitlements`. <!-- id:r1 -->
-- [x] CI: `release.yml` imports the cert and notary key from secrets when present, uploads dmg + zip. <!-- id:r2 -->
-- [ ] Hiren: enroll Apple Developer Program, make the Developer ID Application cert, `notarytool store-credentials`, run the script once with both vars, then add the 6 GitHub secrets. <!-- id:r1b -->
-- [x] No startup panic without audio output: silent engine + "Retry audio" banner; media controls optional. <!-- id:r3 -->
-- [x] `move_to_folder` uses `file_ops::move_file` (copy-then-remove fallback across volumes, tested). <!-- id:r4 -->
-- [ ] `TrackId` identity for `playing_track` / `confirm_delete`; delete the index-shifting code. <!-- id:r6 -->
-- [ ] Unit tests for `remove_from_playlist`, `compare_tracks`, `beat_in_bar`, `resample_interleaved`. <!-- id:r7 -->
-- [x] GPL-3.0-or-later LICENSE, About window, `THIRD_PARTY_LICENSES.html` via cargo-about, shipped in the bundle and Windows zip. <!-- id:p1 -->
-- [x] Auto tag-writing is opt-in (off by default); settings persist via eframe storage. <!-- id:p2 -->
-- [x] Transport button and Bar readout clipping fixed; volume fader + mute next to transport. <!-- id:p3 -->
-- [ ] Hiren checks the new transport row, volume fader and About window by eye. <!-- id:p4 -->
-- [ ] CHANGELOG.md (keepachangelog) + bump to 1.1.0 for the first public release. <!-- id:p5 -->
-- [ ] "New version available" check: fetch `latest.json` from Hiren's site on launch, dismissable banner, off-switch, privacy note updated. <!-- id:p6 -->
-- [ ] Download page on Hiren's site: per-OS buttons, version, size, SHA-256, min OS, changelog, uninstall steps, license + source link. <!-- id:p7 -->
-- [ ] Windows: real installer + uninstaller (prototype Velopack), OV Authenticode cert, test on a real Windows machine. <!-- id:p8 -->
+- [ ] Verify system play/pause in the packaged `Qinip.app` (media keys, Control Center, Bluetooth headphone button). If it fails there too, dig into souvlaki registration. <!-- id:n1 cu:123kjkdmpx9 -->
+- [x] Multi-select + batch delete (Shift/Cmd click, Cmd+A, Esc, Backspace removes the set high→low). <!-- id:n2 cu:123kjkdmpxa -->
+- [x] Folder group headers in load-order view, driven by `TrackEntry::source_folder`. <!-- id:n3 cu:123kjkdmpxb -->
+- [x] Multi-folder / folder+file drop loads everything. <!-- id:n4 cu:123kjkdmpxd -->
+- [x] Feature branch + WIP committed as a fallback point. <!-- id:n5 cu:123kjkdmpxe -->
+- [ ] Hiren test-drives the new selection UX and folder headers in the bundle; adjust by feel. <!-- id:n6 cu:123kjkdmpxf -->
+- [x] Release pipeline: `package-macos.sh` does Developer ID + hardened runtime + notarize + staple + dmg when `SIGN_IDENTITY` / `NOTARY_PROFILE` are set, ad-hoc otherwise; empty `scripts/qinip.entitlements`. <!-- id:r1 cu:123kjkdmpxg -->
+- [x] CI: `release.yml` imports the cert and notary key from secrets when present, uploads dmg + zip. <!-- id:r2 cu:123kjkdmpxh -->
+- [ ] Hiren: enroll Apple Developer Program, make the Developer ID Application cert, `notarytool store-credentials`, run the script once with both vars, then add the 6 GitHub secrets. <!-- id:r1b cu:123kjkdmpxj -->
+- [x] No startup panic without audio output: silent engine + "Retry audio" banner; media controls optional. <!-- id:r3 cu:123kjkdmpxk -->
+- [x] `move_to_folder` uses `file_ops::move_file` (copy-then-remove fallback across volumes, tested). <!-- id:r4 cu:123kjkdmpxm -->
+- [ ] `TrackId` identity for `playing_track` / `confirm_delete`; delete the index-shifting code. <!-- id:r6 cu:123kjkdmpxn -->
+- [ ] Unit tests for `remove_from_playlist`, `compare_tracks`, `beat_in_bar`, `resample_interleaved`. <!-- id:r7 cu:123kjkdmpxp -->
+- [x] GPL-3.0-or-later LICENSE, About window, `THIRD_PARTY_LICENSES.html` via cargo-about, shipped in the bundle and Windows zip. <!-- id:p1 cu:123kjkdmpxq -->
+- [x] Auto tag-writing is opt-in (off by default); settings persist via eframe storage. <!-- id:p2 cu:123kjkdmpxr -->
+- [x] Transport button and Bar readout clipping fixed; volume fader + mute next to transport. <!-- id:p3 cu:123kjkdmpxt -->
+- [ ] Hiren checks the new transport row, volume fader and About window by eye. <!-- id:p4 cu:123kjkdmpxu -->
+- [ ] CHANGELOG.md (keepachangelog) + bump to 1.1.0 for the first public release. <!-- id:p5 cu:123kjkdmpxv -->
+- [ ] "New version available" check: fetch `latest.json` from Hiren's site on launch, dismissable banner, off-switch, privacy note updated. <!-- id:p6 cu:123kjkdmpxw -->
+- [ ] Download page on Hiren's site: per-OS buttons, version, size, SHA-256, min OS, changelog, uninstall steps, license + source link. <!-- id:p7 cu:123kjkdmpxx -->
+- [ ] Windows: real installer + uninstaller (prototype Velopack), OV Authenticode cert, test on a real Windows machine. <!-- id:p8 cu:123kjkdmpxy -->
 
 ## Roadmap — far future
 
-- [ ] Resampling off the UI thread, or cache per device rate. <!-- id:r8 -->
-- [ ] Worker blocks on `recv()` instead of a 20 ms sleep. <!-- id:r9 -->
-- [ ] Split the god object: `playlist_view.rs`, `transport_view.rs`, `theme.rs`, `analysis.rs`, and a `PlaylistAction` enum (name the Command pattern already in use). <!-- id:r10 -->
-- [ ] Windows: Authenticode signing (OV cert, e.g. Certum) + verify souvlaki with a real `hwnd`. <!-- id:f1 -->
-- [ ] Persist playlist / session between launches. <!-- id:f2 -->
-- [ ] Non-MP3 formats (FLAC/WAV/AAC) via symphonia's other decoders. <!-- id:f3 -->
-- [x] Package-currency pass: `cargo update` (patch/minor), egui/eframe 0.36, Rust 1.99, clippy auto-fixes. <!-- id:f4 -->
-- [ ] symphonia 0.5 to 0.6: breaking decode API; do it after release, behind the decode tests. <!-- id:f5 -->
-- [ ] souvlaki 0.8.3 pulls `block 0.1.6` (old `cocoa`), which a future Rust will reject. Watch for a souvlaki release or patch it. <!-- id:f6 -->
-- [ ] Beat-synced Bar counter / metronome: today's counter assumes beat 1 at 0:00, so it drifts from the music on most tracks. Needs a beat grid (first-downbeat offset from aubio onsets), then the counter and a click track can follow it. <!-- id:f7 -->
-- [ ] Velopack auto-update (replaces the p6 banner with in-app updates). <!-- id:f8 -->
+- [ ] Resampling off the UI thread, or cache per device rate. <!-- id:r8 cu:123kjkdmpxz -->
+- [ ] Worker blocks on `recv()` instead of a 20 ms sleep. <!-- id:r9 cu:123kjkdmpy0 -->
+- [ ] Split the god object: `playlist_view.rs`, `transport_view.rs`, `theme.rs`, `analysis.rs`, and a `PlaylistAction` enum (name the Command pattern already in use). <!-- id:r10 cu:123kjkdmpy1 -->
+- [ ] Windows: Authenticode signing (OV cert, e.g. Certum) + verify souvlaki with a real `hwnd`. <!-- id:f1 cu:123kjkdmpy2 -->
+- [ ] Persist playlist / session between launches. <!-- id:f2 cu:123kjkdmpy3 -->
+- [ ] Non-MP3 formats (FLAC/WAV/AAC) via symphonia's other decoders. <!-- id:f3 cu:123kjkdmpy4 -->
+- [x] Package-currency pass: `cargo update` (patch/minor), egui/eframe 0.36, Rust 1.99, clippy auto-fixes. <!-- id:f4 cu:123kjkdmpy5 -->
+- [ ] symphonia 0.5 to 0.6: breaking decode API; do it after release, behind the decode tests. <!-- id:f5 cu:123kjkdmpy6 -->
+- [ ] souvlaki 0.8.3 pulls `block 0.1.6` (old `cocoa`), which a future Rust will reject. Watch for a souvlaki release or patch it. <!-- id:f6 cu:123kjkdmpy7 -->
+- [ ] Beat-synced Bar counter / metronome: today's counter assumes beat 1 at 0:00, so it drifts from the music on most tracks. Needs a beat grid (first-downbeat offset from aubio onsets), then the counter and a click track can follow it. <!-- id:f7 cu:123kjkdmpy8 -->
+- [ ] Velopack auto-update (replaces the p6 banner with in-app updates). <!-- id:f8 cu:123kjkdmpy9 -->
 
 ---
 
