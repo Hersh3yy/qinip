@@ -14,11 +14,13 @@
 **Repo** · git@github.com:Hersh3yy/qinip.git · working on `feat/multiselect-folders-media` (merge to `master` only when sure)
 **Hosting** · Desktop app. Distributed as GitHub Releases (`Qinip.app` zip for macOS arm64, `Qinip.exe` zip for Windows x64).
 **ClickUp** · not linked
-**Last assessed** · 2026-10-05
+**Last assessed** · 2026-10-14
 
 ---
 
 ## Run it
+
+Needs Rust 1.95+ (egui 0.36); this Mac runs 1.99. On a new laptop: `rustup update stable`, then the commands below. Optional: `cargo install cargo-about --locked --features cli` to regenerate `assets/THIRD_PARTY_LICENSES.html` after dependency changes (command in `scripts/licenses/about.toml`).
 
 ```bash
 cargo run --release
@@ -94,6 +96,8 @@ sequenceDiagram
     SM->>OS: Now Playing metadata and playback
 ```
 
+**Explainer deck:** "Qinip for Nami", 15 slides for a non-programmer (journey of a song, sound as numbers, the four bands, beat and key with the real figures from the test track, mistakes fixed, release, roadmap): https://claude.ai/artifact/SrzZvf3F7X8Mg1zLWs21Qq (private until shared). Source slides in `docs/qinip-for-nami/project/`; images there point at the artifact's uploaded assets, so they only render inside the artifact.
+
 ## Hard parts
 
 ### OS media keys route to the bundled app, not the binary
@@ -161,6 +165,11 @@ Release is next week. Order is risk reduced per hour; full detail per item in `d
 ## Diary
 
 <!-- Newest first. One entry per working session. Terse, factual, honest. Append only. -->
+
+### 2026-10-14 — Nami explainer deck, push
+- Measured the test track with `cargo run --release --bin analyze`: 255.1 s, 44,100 Hz stereo, 22,498,560 samples; bands Low 63.2 % / LowMid 16.7 % / HiMid 9.7 % / Hi 10.3 %; 121.9 BPM (aubio confidence 0.26); A minor (correlation 0.772) = 8A. These are the numbers used in the deck.
+- Built "Qinip for Nami" (Slides artifact, 15 slides, speaker notes with a question per slide). Source kept in `docs/qinip-for-nami/`.
+- Pushed `feat/multiselect-folders-media` to origin so work can continue on the other laptop. Not merged to `master`.
 
 ### 2026-10-05 — license, opt-in tag writes, deps, transport UI
 - Licensed GPL-3.0-or-later (aubio is GPL-3.0 and statically compiled in). LICENSE, Cargo metadata, About window, `THIRD_PARTY_LICENSES.html` (cargo-about config in `scripts/licenses/`), both shipped in the .app Resources and the Windows zip.

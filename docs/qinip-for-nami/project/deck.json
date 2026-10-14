@@ -1,0 +1,18 @@
+{
+  "v": 4,
+  "createdOnFiles": {"v": 1, "at": "2026-10-14T10:00:00Z"},
+  "lists": "css",
+  "title": "Qinip for Nami",
+  "order": ["cover", "why", "feel", "journey", "numbers", "bands", "beat", "key", "saved", "helpers", "oops", "fresh", "release", "roadmap", "turn"],
+  "sections": {
+    "s1": {"description": "What Qinip is and how it feels to use", "start": "cover"},
+    "s2": {"description": "Inside: one song's journey, sound as numbers, beat, key, memory, helpers", "start": "journey"},
+    "s3": {"description": "Mistakes we found and fixed, and what is new", "start": "oops"},
+    "s4": {"description": "Getting it to strangers safely, the roadmap, and a game", "start": "release"}
+  },
+  "faces": {
+    "fredoka": {"family": "Fredoka", "href": "https://fonts.googleapis.com/css2?family=Fredoka:wght@400..700&family=Nunito:wght@400;600;800&display=swap"},
+    "nunito": {"family": "Nunito", "href": "https://fonts.googleapis.com/css2?family=Fredoka:wght@400..700&family=Nunito:wght@400;600;800&display=swap"}
+  },
+  "designSystems": []
+}
