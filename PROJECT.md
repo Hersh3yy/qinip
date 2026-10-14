@@ -10,7 +10,7 @@
 
 **What it is** · Free MP3 pack-audition player for macOS/Windows: playlist, coloured 4-band waveform, EQ knobs, background BPM/key/Camelot analysis, gapless autoplay.
 **Stack** · Rust, egui/eframe (immediate-mode GUI), cpal (audio out), symphonia (MP3 decode), aubio (BPM/key), souvlaki (OS media controls), id3 (tag write).
-**Status** · 🟡 rough — v1.0.0 ships and runs; multi-select, folder groups and multi-folder drop landed on the feature branch (compiles, 4 unit tests green); system media keys still need a real-world check in the bundle; release next week needs signing + notarization (see `docs/release-and-code-quality.md`).
+**Status** · 🟡 rough — v1.0.0 ships and runs; multi-select, folder groups and multi-folder drop landed on the feature branch (compiles, 6 unit tests green); system media keys still need a real-world check in the bundle; release next week needs signing + notarization (see `docs/release-and-code-quality.md`).
 **Repo** · git@github.com:Hersh3yy/qinip.git · working on `feat/multiselect-folders-media` (merge to `master` only when sure)
 **Hosting** · Desktop app. Distributed as GitHub Releases (`Qinip.app` zip for macOS arm64, `Qinip.exe` zip for Windows x64).
 **ClickUp** · not linked
@@ -34,7 +34,7 @@ cargo run --release
 
 ## Status
 
-v1.0.0 is real and used: load folders of MP3s, sortable playlist, per-band coloured waveform, 4-band EQ, background BPM/key/Camelot, gapless autoplay, tag write-back, right-click track ops. On `feat/multiselect-folders-media`: the souvlaki media-controls WIP is committed as a fallback point, and on top of it multi-select (Shift/Cmd click, Cmd+A, Esc, batch Backspace), per-folder group headers in the load-order view, and multi-folder drop. `cargo check` green, no warnings, `cargo test` 4/4. A fresh ad-hoc-signed `Qinip.app` is built at `target/release/bundle/osx/`. Not yet verified by a human: media keys in the bundle, the new selection UX by feel. Release blocker for "trustworthy" is signing + notarization; the full plan is in `docs/release-and-code-quality.md`.
+v1.0.0 is real and used: load folders of MP3s, sortable playlist, per-band coloured waveform, 4-band EQ, background BPM/key/Camelot, gapless autoplay, tag write-back, right-click track ops. On `feat/multiselect-folders-media`: the souvlaki media-controls WIP is committed as a fallback point, and on top of it multi-select (Shift/Cmd click, Cmd+A, Esc, batch Backspace), per-folder group headers in the load-order view, and multi-folder drop. `cargo check` green, no warnings, `cargo test` 6/6. A fresh ad-hoc-signed `Qinip.app` is built at `target/release/bundle/osx/`. Not yet verified by a human: media keys in the bundle, the new selection UX by feel. Release blocker for "trustworthy" is signing + notarization; the full plan is in `docs/release-and-code-quality.md`.
 
 ## Issues
 
