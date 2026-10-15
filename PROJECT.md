@@ -15,7 +15,7 @@
 **Repo** · git@github.com:Hersh3yy/qinip.git · working on `feat/multiselect-folders-media` (merge to `master` only when sure)
 **Hosting** · Desktop app. Distributed as GitHub Releases (`Qinip.app` zip for macOS arm64, `Qinip.exe` zip for Windows x64).
 **ClickUp** · not linked
-**Last assessed** · 2026-10-14
+**Last assessed** · 2026-10-15
 
 ---
 
@@ -146,6 +146,9 @@ Release is next week. Order is risk reduced per hour; full detail per item in `d
 - [ ] "New version available" check: fetch `latest.json` from Hiren's site on launch, dismissable banner, off-switch, privacy note updated. <!-- id:p6 cu:123kjkdmpxw -->
 - [ ] Download page on Hiren's site: per-OS buttons, version, size, SHA-256, min OS, changelog, uninstall steps, license + source link. <!-- id:p7 cu:123kjkdmpxx -->
 - [ ] Windows: real installer + uninstaller (prototype Velopack), OV Authenticode cert, test on a real Windows machine. <!-- id:p8 cu:123kjkdmpxy -->
+- [x] Shuffle + repeat (off/all/one) in the transport; rules unit-tested. <!-- id:p9 -->
+- [x] Themes: Match system, Dark, Light, Solarized Dark, Solarized Light; palette contrast tested. <!-- id:p10 -->
+- [x] Stable release asset names (`qinip-macos-arm64.dmg/.zip`, `qinip-windows-x64.zip`) + `SHA256SUMS.txt` from CI, so the website links `releases/latest/download/<name>` forever. <!-- id:p11 -->
 
 ## Roadmap — far future
 
@@ -159,6 +162,8 @@ Release is next week. Order is risk reduced per hour; full detail per item in `d
 - [ ] symphonia 0.5 to 0.6: breaking decode API; do it after release, behind the decode tests. <!-- id:f5 cu:123kjkdmpy6 -->
 - [ ] souvlaki 0.8.3 pulls `block 0.1.6` (old `cocoa`), which a future Rust will reject. Watch for a souvlaki release or patch it. <!-- id:f6 cu:123kjkdmpy7 -->
 - [ ] Beat-synced Bar counter / metronome: today's counter assumes beat 1 at 0:00, so it drifts from the music on most tracks. Needs a beat grid (first-downbeat offset from aubio onsets), then the counter and a click track can follow it. <!-- id:f7 cu:123kjkdmpy8 -->
+  Plan: (1) keep aubio's per-beat times during analysis, not just the BPM; (2) refine BPM with a line fit through them, grid phase = circular mean of beat-time mod period; (3) guess the downbeat as the phase whose beats carry the most Low-band energy (kick on the 1); (4) a "set beat 1 here" nudge for when the guess is wrong, like Rekordbox's grid adjust; (5) counter and loop buttons snap to the grid; (6) metronome = a click mixed in the audio callback at grid times. About two sessions.
+- [ ] Rekordbox bridge via rekordbox XML, the import format Pioneer documents and Rekordbox 6/7 read. Qinip keeps its own playlists and writes them to one XML file; right-click → "Add to Rekordbox playlist ▸ <name> / New…". One-time Rekordbox setup (Preferences > Advanced > Database > rekordbox xml; show "rekordbox xml" in the tree), then refresh + Import in Rekordbox. Not writing Rekordbox's own `master.db` (encrypted, undocumented, can corrupt the library). Check against Hiren's Rekordbox version first. <!-- id:f9 -->
 - [ ] Velopack auto-update (replaces the p6 banner with in-app updates). <!-- id:f8 cu:123kjkdmpy9 -->
 
 ---
@@ -166,6 +171,12 @@ Release is next week. Order is risk reduced per hour; full detail per item in `d
 ## Diary
 
 <!-- Newest first. One entry per working session. Terse, factual, honest. Append only. -->
+
+### 2026-10-15 — shuffle/repeat, themes, release naming
+- Shuffle + repeat (off/all/one) as transport buttons. `next_candidates()` holds the rules (4 tests); `upcoming` remembers the chosen next track by path so gapless preload and advance agree, forgotten (preload dropped via new `PlaybackEngine::clear_queued`) on shuffle/repeat change, sort, load, removal. Shuffle history drives Previous. Persisted.
+- `src/theme.rs`: ThemeChoice + Palette; ~30 hardcoded colours in `app.rs` and the Bar widget now read the palette. Waveform stays a dark screen, knobs/buttons stay hardware. Contrast test covers every theme. Theme picker in the top bar, persisted.
+- Release: stable asset names + SHA256SUMS in CI. Rekordbox XML bridge (f9) and beat-grid plan (f7) written up, not built.
+- Tests 11/11. Packaged, installed, launched. Light/Solarized themes not looked at by a human yet.
 
 ### 2026-10-14 — Nami explainer deck, push
 - Measured the test track with `cargo run --release --bin analyze`: 255.1 s, 44,100 Hz stereo, 22,498,560 samples; bands Low 63.2 % / LowMid 16.7 % / HiMid 9.7 % / Hi 10.3 %; 121.9 BPM (aubio confidence 0.26); A minor (correlation 0.772) = 8A. These are the numbers used in the deck.

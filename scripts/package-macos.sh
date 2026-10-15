@@ -21,7 +21,7 @@
 #
 # Output (target/release/bundle/):
 #   osx/Qinip.app
-#   Qinip-<version>.dmg
+#   qinip-macos-arm64.dmg   (stable name, so a GitHub "latest" link never changes)
 #   qinip-macos-arm64.zip
 
 set -euo pipefail
@@ -40,7 +40,7 @@ cd "$REPO_ROOT"
 VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
 # CFBundleVersion must only ever go up; the commit count does that for free.
 BUILD_NUMBER="$(git rev-list --count HEAD 2>/dev/null || echo 1)"
-DMG_PATH="$BUNDLE_DIR/Qinip-$VERSION.dmg"
+DMG_PATH="$BUNDLE_DIR/qinip-macos-arm64.dmg"
 ZIP_PATH="$BUNDLE_DIR/qinip-macos-arm64.zip"
 
 if [ -n "$NOTARY_PROFILE" ] && [ -z "$SIGN_IDENTITY" ]; then

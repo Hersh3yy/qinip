@@ -106,10 +106,15 @@ Hover the title to see the original filename.
 
 ### Transport
 
-- **Transport buttons** (beside the EQ knobs): Previous · Play/Pause · Next · Stop · ±10s seek.
+- **Transport buttons** (beside the EQ knobs): Previous · Play/Pause · Next · Stop · ±10s seek · Shuffle · Repeat (click to cycle off → all → one).
+- **Shuffle** plays every track once in random order before repeating any; **Previous** steps back through what actually played. **Repeat one** replays the track at its end, but **Next** still moves on.
 - **Seek bar** (bottom): drag to jump in time.
 - **Volume** (right of the transport buttons): fader with % readout; the speaker button mutes and unmutes. Volume is remembered between launches.
 - **Autoplay**: when on, plays the next playlist row after the current track finishes (gapless when the next file is already decoded), but only if that track was "played" (≥ 20s listened).
+
+### Themes
+
+Pick a theme from the dropdown in the top bar: **Match system** (follows your OS light/dark setting), **Dark**, **Light**, **Solarized Dark** or **Solarized Light**. The waveform keeps its dark screen in every theme so the band colours stay easy to read. Your choice is remembered.
 
 ### Waveform & EQ
 
@@ -147,7 +152,7 @@ cargo run --release
 Package installers locally:
 
 ```bash
-bash scripts/package-macos.sh    # → target/release/bundle/{osx/Qinip.app, Qinip-<version>.dmg, qinip-macos-arm64.zip}
+bash scripts/package-macos.sh    # → target/release/bundle/{osx/Qinip.app, qinip-macos-arm64.dmg, qinip-macos-arm64.zip}
 bash scripts/package-windows.sh  # → target/release/qinip-windows-x64.zip (on Windows)
 ```
 
