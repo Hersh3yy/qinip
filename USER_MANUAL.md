@@ -66,6 +66,7 @@ bash scripts/package-windows.sh
 | **Double-click** or **Enter** | Play the selected track |
 | **Backspace** (Mac) / **Delete** | Remove from playlist only — **never deletes the file** |
 | **Load Folder** / drop files | **Adds** to the existing list (skips duplicates) |
+| **Clear Playlist** | Empties the list and stops playback (files stay on disk) |
 | **Right-click** title | Context menu (see below) |
 | **Column header click** | Sort asc → desc → off (click again to cycle) |
 | **Drag column header edge** | Resize column |
@@ -77,7 +78,7 @@ bash scripts/package-windows.sh
 | **Play** | Start the track |
 | **Remove from playlist** | Drop from the list only (file stays on disk) |
 | **Open enclosing folder** | Opens the folder containing the file in Finder / Explorer |
-| **Move to folder…** | Pick a destination folder; moves the MP3 on disk and updates the playlist path |
+| **Move to folder…** | Pick a destination folder; moves the MP3 on disk and removes it from the playlist. If a file with the same name exists there, you're asked whether to replace it |
 | **Write BPM/Key tags** | Writes analysis into the file's ID3 tags (`TBPM`, `TKEY`) — requires analysis to be finished |
 | **Delete from disk…** | Permanently deletes the MP3 after a confirm dialog — **cannot be undone** |
 
