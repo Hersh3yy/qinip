@@ -150,6 +150,27 @@ mkdir -p "$DMG_STAGE"
 cp -R "$APP_DIR" "$DMG_STAGE/"
 # The Applications shortcut gives the familiar drag-to-install window.
 ln -s /Applications "$DMG_STAGE/Applications"
+# Without Apple notarization, macOS blocks the first launch. Say how to get
+# past it right where the user is looking.
+if [ -z "$NOTARY_PROFILE" ]; then
+  cat > "$DMG_STAGE/If macOS blocks Qinip.txt" <<'TXT'
+Qinip is free and not notarized by Apple (that costs 99 USD a year), so the
+first time you open it macOS says it can't check it for malicious software.
+
+To open it anyway (only needed once):
+
+1. Drag Qinip into Applications and double-click it. macOS blocks it. Click Done.
+2. Open System Settings > Privacy & Security.
+3. Scroll down. Next to "Qinip was blocked", click Open Anyway.
+4. Confirm with your password or Touch ID, then click Open.
+
+From then on Qinip opens normally.
+
+Source code: https://github.com/Hersh3yy/qinip
+Check your download against SHA256SUMS.txt on the release page:
+  shasum -a 256 ~/Downloads/qinip-macos-arm64.dmg
+TXT
+fi
 hdiutil create -volname "Qinip" -srcfolder "$DMG_STAGE" -ov -format UDZO "$DMG_PATH" >/dev/null
 rm -rf "$DMG_STAGE"
 

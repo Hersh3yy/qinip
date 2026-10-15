@@ -11,7 +11,7 @@
 
 **What it is** · Free MP3 pack-audition player for macOS/Windows: playlist, coloured 4-band waveform, EQ knobs, background BPM/key/Camelot analysis, gapless autoplay.
 **Stack** · Rust, egui/eframe (immediate-mode GUI), cpal (audio out), symphonia (MP3 decode), aubio (BPM/key), souvlaki (OS media controls), id3 (tag write).
-**Status** · 🟡 rough — v1.0.0 ships and runs; multi-select, folder groups and multi-folder drop landed on the feature branch (compiles, 6 unit tests green); system media keys still need a real-world check in the bundle; release next week needs signing + notarization (see `docs/release-and-code-quality.md`).
+**Status** · 🟡 rough — v1.0.0 is the last release; everything since sits under Unreleased in CHANGELOG.md on the feature branch (17 tests, strict clippy clean). Next: Hiren test-drives, merge to `master`, cut v1.1.0 with `scripts/release.sh`. Mac builds ship un-notarized (no paid Apple account) with "Open Anyway" instructions.
 **Repo** · git@github.com:Hersh3yy/qinip.git · working on `feat/multiselect-folders-media` (merge to `master` only when sure)
 **Hosting** · Desktop app. Distributed as GitHub Releases (`Qinip.app` zip for macOS arm64, `Qinip.exe` zip for Windows x64).
 **ClickUp** · not linked
@@ -21,17 +21,38 @@
 
 ## Run it
 
-Needs Rust 1.95+ (egui 0.36); this Mac runs 1.99. On a new laptop: `rustup update stable`, then the commands below. Optional: `cargo install cargo-about --locked --features cli` to regenerate `assets/THIRD_PARTY_LICENSES.html` after dependency changes (command in `scripts/licenses/about.toml`).
-
 ```bash
 cargo run --release
 ```
 
-- `--release` matters: analysis (aubio) is ~18x faster than debug.
-- Dev logging: `QINIP_DEV=1 cargo run --release` (stderr timing/logs).
-- macOS `.app` bundle: `bash scripts/package-macos.sh` → `target/release/bundle/osx/Qinip.app`.
-- Windows package: `scripts/package-windows.sh`.
-- Gotcha: `cargo run` runs a bare binary, not the `.app` bundle. Dock icon is force-set in code for that reason (`src/macos_icon.rs:1`), and OS media-key routing likely needs the bundle too (see Issues #1).
+- `--release` matters: analysis (aubio) is ~18x faster than debug. Dev logging: `QINIP_DEV=1 cargo run --release`.
+- Needs Rust 1.95+ (egui 0.36). `cargo run` is a bare binary, not the `.app`: media keys and the Dock icon behave differently; test those in the bundle (`bash scripts/package-macos.sh`).
+- Regenerate third-party licenses after dependency changes: `cargo about generate -c scripts/licenses/about.toml scripts/licenses/about.hbs > assets/THIRD_PARTY_LICENSES.html` (`cargo install cargo-about --locked --features cli` once).
+
+### Developer setup, Mac
+
+1. `xcode-select --install` (the C compiler and libclang that aubio's build needs).
+2. Install Rust: `curl https://sh.rustup.rs -sSf | sh`, then `rustup update stable`.
+3. `git clone git@github.com:Hersh3yy/qinip.git && cd qinip && cargo run --release`.
+4. Try it as users get it: `bash scripts/package-macos.sh`, then `cp -R target/release/bundle/osx/Qinip.app ~/Applications/`.
+
+### Developer setup, Windows
+
+1. Install **Visual Studio Build Tools** with the "Desktop development with C++" workload (Rust's MSVC linker and aubio's C code need it): `winget install Microsoft.VisualStudio.2022.BuildTools`, then tick that workload in the installer.
+2. Install **LLVM** (aubio's bindgen needs libclang): `winget install LLVM.LLVM`, and set `LIBCLANG_PATH=C:\Program Files\LLVM\bin` (System → Environment Variables).
+3. Install **Rust** from rustup.rs (`rustup-init.exe`, default MSVC toolchain) and **Git** (`winget install Git.Git`).
+4. In Git Bash: `git clone https://github.com/Hersh3yy/qinip.git && cd qinip && cargo run --release`.
+5. Package: `bash scripts/package-windows.sh` → `target/release/qinip-windows-x64.zip`.
+6. No Windows machine? GitHub → Actions → Release → **Run workflow** on your branch builds the Windows zip as a downloadable artifact without publishing anything.
+
+### Branches and releases (the rules)
+
+- `master` is always releasable. Work happens on a branch (`feat/...`, `fix/...`); merge into `master` only when it's tested in the bundle.
+- Every user-visible change adds a line under `## [Unreleased]` in `CHANGELOG.md`, in the same commit.
+- CI (`.github/workflows/ci.yml`) runs tests + strict clippy on every push to `master` and every pull request.
+- A release is cut once in a while, only from `master`, only with `./scripts/release.sh X.Y.Z` (try `--dry-run` first). It checks branch, clean tree, version, changelog, tests; moves Unreleased into the version; bumps `Cargo.toml`; commits and tags; asks before pushing.
+- The pushed tag starts `release.yml`: it refuses a tag that doesn't match `Cargo.toml` or has no changelog section, builds Mac + Windows, and publishes the GitHub release with that changelog section and download/"Open Anyway" instructions. Nothing else ever creates a release.
+- Version numbers: bug fixes only = patch (1.1.1), new features = minor (1.2.0), breaking saved data/behaviour = major (2.0.0).
 
 ## Status
 
@@ -143,6 +164,7 @@ Release is next week. Order is risk reduced per hour; full detail per item in `d
 - [x] Transport button and Bar readout clipping fixed; volume fader + mute next to transport. <!-- id:p3 cu:123kjkdmpxt -->
 - [ ] Hiren checks the new transport row, volume fader and About window by eye. <!-- id:p4 cu:123kjkdmpxu -->
 - [ ] CHANGELOG.md (keepachangelog) + bump to 1.1.0 for the first public release. <!-- id:p5 cu:123kjkdmpxv -->
+  CHANGELOG.md, `scripts/release.sh`, CI checks and tag verification are in; what's left is merging to `master` and running `./scripts/release.sh 1.1.0`.
 - [ ] "New version available" check: fetch `latest.json` from Hiren's site on launch, dismissable banner, off-switch, privacy note updated. <!-- id:p6 cu:123kjkdmpxw -->
 - [ ] Download page on Hiren's site: per-OS buttons, version, size, SHA-256, min OS, changelog, uninstall steps, license + source link. <!-- id:p7 cu:123kjkdmpxx -->
 - [ ] Windows: real installer + uninstaller (prototype Velopack), OV Authenticode cert, test on a real Windows machine. <!-- id:p8 cu:123kjkdmpxy -->
@@ -163,7 +185,7 @@ Release is next week. Order is risk reduced per hour; full detail per item in `d
 - [ ] souvlaki 0.8.3 pulls `block 0.1.6` (old `cocoa`), which a future Rust will reject. Watch for a souvlaki release or patch it. <!-- id:f6 cu:123kjkdmpy7 -->
 - [ ] Beat-synced Bar counter / metronome: today's counter assumes beat 1 at 0:00, so it drifts from the music on most tracks. Needs a beat grid (first-downbeat offset from aubio onsets), then the counter and a click track can follow it. <!-- id:f7 cu:123kjkdmpy8 -->
   Plan: (1) keep aubio's per-beat times during analysis, not just the BPM; (2) refine BPM with a line fit through them, grid phase = circular mean of beat-time mod period; (3) guess the downbeat as the phase whose beats carry the most Low-band energy (kick on the 1); (4) a "set beat 1 here" nudge for when the guess is wrong, like Rekordbox's grid adjust; (5) counter and loop buttons snap to the grid; (6) metronome = a click mixed in the audio callback at grid times. About two sessions.
-- [ ] Rekordbox bridge via rekordbox XML, the import format Pioneer documents and Rekordbox 6/7 read. Qinip keeps its own playlists and writes them to one XML file; right-click → "Add to Rekordbox playlist ▸ <name> / New…". One-time Rekordbox setup (Preferences > Advanced > Database > rekordbox xml; show "rekordbox xml" in the tree), then refresh + Import in Rekordbox. Not writing Rekordbox's own `master.db` (encrypted, undocumented, can corrupt the library). Check against Hiren's Rekordbox version first. <!-- id:f9 -->
+- [x] Rekordbox bridge via rekordbox XML, the import format Pioneer documents and Rekordbox 6/7 read. Qinip keeps its own playlists and writes them to one XML file; right-click → "Add to Rekordbox playlist ▸ <name> / New…". One-time Rekordbox setup (Preferences > Advanced > Database > rekordbox xml; show "rekordbox xml" in the tree), then refresh + Import in Rekordbox. Not writing Rekordbox's own `master.db` (encrypted, undocumented, can corrupt the library). Check against Hiren's Rekordbox version first. <!-- id:f9 -->
 - [ ] Velopack auto-update (replaces the p6 banner with in-app updates). <!-- id:f8 cu:123kjkdmpy9 -->
 
 ---
@@ -171,6 +193,12 @@ Release is next week. Order is risk reduced per hour; full detail per item in `d
 ## Diary
 
 <!-- Newest first. One entry per working session. Terse, factual, honest. Append only. -->
+
+### 2026-10-15 (later) — rekordbox bridge, strict release flow
+- `src/rekordbox.rs`: crates (Qinip playlists) persisted in settings and exported as rekordbox XML (COLLECTION + ROOT > "Qinip" folder > playlists, KeyType 0). Writes to rekordbox's own `bridgeImportedLibraryFile` (read from `~/Library/Application Support/Pioneer/rekordbox6/rekordbox3.settings`, confirmed on Hiren's rekordbox 7.1.3) when that file is missing or Qinip's, else `~/Music/Qinip/qinip-rekordbox.xml`; never another tool's file, never rekordbox settings or master.db. Atomic write. 6 tests.
+- UI: right-click → Add (N selected) to Rekordbox playlist ▸ existing / New playlist…; Rekordbox window with a live setup checklist (installed, file, "rekordbox xml" list visible via `showRbXml`), Open rekordbox, per-import steps, crate list. Paths checked against the rekordbox 7.2.3 manual by a research agent: Advanced > Database > rekordbox xml > Imported Library; View > Layout > Media Browser > rekordbox xml; refresh icon; Import Playlist; re-import duplicates; Import To Collection for BPM/key on existing tracks. Not confirmed: Tonality notation (we write "Am"/"C#").
+- Release flow: CHANGELOG.md (Unreleased holds everything since 1.0.0), `scripts/release.sh` (checks + bump + tag, asks before push; changelog/version rewrite tested on copies), `ci.yml` (tests + clippy -D warnings), `release.yml` verifies tag vs Cargo.toml + changelog and publishes the changelog section as notes. Un-notarized Mac dmg now carries "If macOS blocks Qinip.txt". Fixed the last clippy warnings so strict CI starts green.
+- Not done: an actual import into rekordbox by a human; first CI run on GitHub.
 
 ### 2026-10-15 — shuffle/repeat, themes, release naming
 - Shuffle + repeat (off/all/one) as transport buttons. `next_candidates()` holds the rules (4 tests); `upcoming` remembers the chosen next track by path so gapless preload and advance agree, forgotten (preload dropped via new `PlaybackEngine::clear_queued`) on shuffle/repeat change, sort, load, removal. Shuffle history drives Previous. Persisted.

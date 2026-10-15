@@ -10,8 +10,25 @@ permissions:
   contents: write
 
 jobs:
+  # A tag must match Cargo.toml and have a CHANGELOG section, or nothing builds.
+  # (workflow_dispatch skips this and never publishes: handy to get a test
+  # Windows build from a branch.)
+  verify:
+    name: Verify tag
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Tag matches Cargo.toml and CHANGELOG.md
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          CARGO="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          [ "$TAG" = "$CARGO" ] || { echo "Tag v$TAG but Cargo.toml says $CARGO"; exit 1; }
+          grep -q "^## \[$TAG\]" CHANGELOG.md || { echo "No ## [$TAG] section in CHANGELOG.md"; exit 1; }
+
   macos:
     name: macOS .app
+    needs: verify
     runs-on: macos-14
     env:
       MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
@@ -81,6 +98,7 @@ jobs:
 
   windows:
     name: Windows exe
+    needs: verify
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -132,26 +150,30 @@ jobs:
           (cd release-assets && sha256sum *.zip *.dmg > SHA256SUMS.txt)
           ls -la release-assets
 
+      - name: Release notes from CHANGELOG.md
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          awk -v v="$VERSION" '$0 ~ "^## \\[" v "\\]" {f=1;next} /^## \[/{f=0} f' CHANGELOG.md > changes.md
+          {
+            echo "## Download"
+            echo ""
+            echo "- **macOS (Apple Silicon):** \`qinip-macos-arm64.dmg\`. Open it, drag Qinip to Applications."
+            echo "  The Mac build is not notarized by Apple yet, so the first time macOS blocks it:"
+            echo "  open **System Settings → Privacy & Security**, scroll down, click **Open Anyway** next to Qinip, confirm. Only needed once."
+            echo "- **Windows (x64):** \`qinip-windows-x64.zip\`. Unzip, run \`Qinip.exe\`. If SmartScreen warns: **More info → Run anyway**."
+            echo "- \`SHA256SUMS.txt\` lets you check a download is untouched."
+            echo ""
+            echo "## What's new"
+            cat changes.md
+          } > notes.md
+          cat notes.md
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           name: Qinip ${{ github.ref_name }}
           draft: false
-          generate_release_notes: true
-          body: |
-            ## Qinip ${{ github.ref_name }}
-
-            MP3 pack audition player — playlist, waveform EQ, BPM/key analysis, gapless autoplay.
-            Named after the qinip fruit — a Clementine-shaped tool for the Apple Silicon era.
-
-            ### Downloads
-            - **macOS (Apple Silicon):** `qinip-macos-arm64.dmg`, open it and drag `Qinip.app` to Applications
-              (or `qinip-macos-arm64.zip`, unzip and drag). Signed and notarized by Apple.
-            - **Windows (x64):** `qinip-windows-x64.zip` — unzip and run `Qinip.exe`.
-
-            ### Notes
-            - Windows build is not Authenticode-signed yet; SmartScreen may warn (More info → Run anyway).
-            - How to use it: see the README.
+          body_path: notes.md
           files: release-assets/*
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -32,10 +32,24 @@ Same idea here: load a bunch of songs, crack one open, see the waveform inside. 
 
 ## Download
 
-Get the latest release from **[GitHub Releases](https://github.com/Hersh3yy/qinip/releases)**:
+Get the latest release from **[GitHub Releases](https://github.com/Hersh3yy/qinip/releases/latest)**:
 
 | Platform | File | What to do |
 |----------|------|------------|
+| **macOS** (Apple Silicon) | `qinip-macos-arm64.dmg` | Open it → drag Qinip to Applications |
+| **Windows** (x64) | `qinip-windows-x64.zip` | Unzip → run `Qinip.exe` |
+
+**macOS, first launch only.** Qinip is not notarized by Apple (that costs 99 USD a year), so macOS blocks the first launch:
+
+1. Double-click Qinip. macOS says it can't check it. Click **Done**.
+2. Open **System Settings → Privacy & Security**, scroll down, click **Open Anyway** next to Qinip.
+3. Confirm with your password or Touch ID, then **Open**. From then on it opens normally.
+
+**Windows:** SmartScreen may warn on an unsigned app: **More info → Run anyway**.
+
+Each release lists `SHA256SUMS.txt`, so you can check a download is untouched (`shasum -a 256 qinip-macos-arm64.dmg`).
+
+----------|------|------------|
 | **macOS** (Apple Silicon) | `qinip-macos-arm64.zip` | Unzip → drag `Qinip.app` to Applications |
 | **Windows** (x64) | `qinip-windows-x64.zip` | Unzip → run `Qinip.exe` |
 
@@ -121,6 +135,20 @@ Pick a theme from the dropdown in the top bar: **Match system** (follows your OS
 - Colored layers = frequency bands: **Low** (orange) · **LowMid** (gold) · **HiMid** (green) · **Hi** (cyan).
 - **Click the waveform** to seek.
 - **EQ knobs** (0%–200%, default 100%): change what you hear **and** how visible that colour is on the waveform. All knobs at **0%** → silence. Double-click or right-click a knob to reset that band to 100%; **Reset EQ** resets all bands.
+
+### Send songs to rekordbox
+
+Right-click a song (or a selection) → **Add to Rekordbox playlist** → pick a playlist or **New playlist…**. Qinip writes a rekordbox XML file (the import format rekordbox 6 and 7 read); it never touches your rekordbox library directly, you choose what to import.
+
+The **Rekordbox** button in the top bar shows a checklist of the one-time setup. Usually it's one tick: in rekordbox, **Preferences → View → Layout → Media Browser → tick "rekordbox xml"**. Qinip writes to the file rekordbox already reads, so no file path to set, unless another tool already uses that file (then the window shows which file to choose).
+
+Each time you add songs, in rekordbox:
+
+1. Click the refresh icon on **rekordbox xml** in the left column.
+2. Open **rekordbox xml → Playlists → Qinip**.
+3. Right-click your playlist → **Import Playlist** (or drag it onto your own Playlists).
+
+Imported that playlist before? Delete the old copy first, or you get two. Songs that were already in rekordbox keep their old BPM/key unless you select them in the rekordbox xml playlist and choose **Import To Collection**.
 
 ### Verifying BPM/Key tag writes
 

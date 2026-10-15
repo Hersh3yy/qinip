@@ -17,6 +17,7 @@ use crate::media::SystemMedia;
 use crate::selection::Selection;
 use crate::playback::PlaybackEngine;
 use crate::playlist::{AnalysisState, Playlist, SortColumn, SortDirection};
+use crate::rekordbox::{self, CrateTrack, Crates, ExportTarget, Setup as RekordboxSetup};
 use crate::tags;
 use crate::theme::{Palette, ThemeChoice};
 use crate::transport::{beat_bar_indicator, transport_button};
@@ -82,6 +83,8 @@ struct Settings {
     theme: ThemeChoice,
     repeat: RepeatMode,
     shuffle: bool,
+    /// Qinip's rekordbox playlists ("crates"), exported as rekordbox XML.
+    crates: Crates,
 }
 
 /// What happens when the playing track ends (and what Next does).
@@ -123,6 +126,7 @@ impl Default for Settings {
             theme: ThemeChoice::System,
             repeat: RepeatMode::Off,
             shuffle: false,
+            crates: Crates::default(),
         }
     }
 }
@@ -164,6 +168,13 @@ pub struct QinipApp {
     /// Tracks played since shuffle went on: avoids repeats until every track
     /// had a turn, and lets Previous walk back through the shuffle order.
     history: Vec<PathBuf>,
+    crates: Crates,
+    /// What we read from rekordbox's settings (refreshed on demand).
+    rb_setup: RekordboxSetup,
+    rb_target: ExportTarget,
+    show_rekordbox: bool,
+    /// "New playlist" dialog: name being typed + the tracks to add.
+    rb_new: Option<(String, Vec<PathBuf>)>,
     was_playing: bool,
     last_listen_at: Option<f64>,
     /// When set, show a confirm dialog before deleting this playlist index from disk.
@@ -216,6 +227,8 @@ impl QinipApp {
         let volume = settings.volume.clamp(0.0, 1.0);
         let _ = playback.set_volume(volume);
 
+        let rb_setup = RekordboxSetup::detect();
+
         let (worker, updates_rx) = AnalysisWorker::spawn();
         let (analysis_tx, analysis_rx) = mpsc::channel();
 
@@ -245,6 +258,11 @@ impl QinipApp {
             shuffle: settings.shuffle,
             upcoming: None,
             history: Vec::new(),
+            rb_target: rekordbox::export_target(&rb_setup),
+            rb_setup,
+            crates: settings.crates,
+            show_rekordbox: false,
+            rb_new: None,
             was_playing: false,
             last_listen_at: None,
             confirm_delete: None,
@@ -644,6 +662,234 @@ impl QinipApp {
         self.repeat = self.repeat.cycle();
         self.forget_upcoming();
         self.status_message = format!("{}.", self.repeat.label());
+    }
+
+    /// Rows a right-click acts on: the whole selection when the clicked row
+    /// is part of a multi-selection, otherwise just that row.
+    fn context_targets(&self, index: usize) -> Vec<usize> {
+        if self.selection.contains(index) && self.selection.len() > 1 {
+            let mut rows = self.selection.indices_desc();
+            rows.reverse();
+            rows
+        } else {
+            vec![index]
+        }
+    }
+
+    fn crate_track(&self, path: &Path) -> Option<CrateTrack> {
+        let t = self.playlist.tracks.iter().find(|t| t.path == path)?;
+        Some(CrateTrack {
+            path: t.path.clone(),
+            title: t.title.clone(),
+            artist: t.artist.clone(),
+            duration_secs: t.duration_secs,
+            bpm: t.bpm,
+            key: t.key.clone(),
+        })
+    }
+
+    fn add_to_crate(&mut self, name: &str, paths: &[PathBuf]) {
+        let name = name.trim();
+        if name.is_empty() {
+            return;
+        }
+        let tracks: Vec<CrateTrack> = paths.iter().filter_map(|p| self.crate_track(p)).collect();
+        let added = self.crates.add(name, tracks);
+        if self.export_rekordbox() {
+            self.status_message = if self.rekordbox_ready() {
+                format!(
+                    "Added {added} to \"{name}\". In rekordbox: refresh the rekordbox xml list, then right-click \"{name}\" → Import Playlist."
+                )
+            } else {
+                format!("Added {added} to \"{name}\". Finish the one-time rekordbox setup to see it there.")
+            };
+        }
+        if !self.rekordbox_ready() {
+            self.show_rekordbox = true;
+        }
+        dev::log(format!("rekordbox crate {name}: +{added}"));
+    }
+
+    /// Re-read rekordbox's settings, pick the export file and write the XML.
+    /// Returns false (with a status message) if writing failed.
+    fn export_rekordbox(&mut self) -> bool {
+        self.refresh_rekordbox_setup();
+        let xml = self.crates.to_xml(env!("CARGO_PKG_VERSION"));
+        match rekordbox::write_xml(&self.rb_target.path, &xml) {
+            Ok(()) => true,
+            Err(err) => {
+                self.status_message = format!("Couldn't write the rekordbox file: {err}");
+                false
+            }
+        }
+    }
+
+    fn refresh_rekordbox_setup(&mut self) {
+        self.rb_setup = RekordboxSetup::detect();
+        self.rb_target = rekordbox::export_target(&self.rb_setup);
+    }
+
+    /// rekordbox reads our file and shows its "rekordbox xml" list.
+    fn rekordbox_ready(&self) -> bool {
+        self.rb_target.rekordbox_reads_it && self.rb_setup.xml_list_visible == Some(true)
+    }
+
+    fn draw_rekordbox_windows(&mut self, ctx: &egui::Context) {
+        if let Some((mut name, paths)) = self.rb_new.take() {
+            let mut keep_open = true;
+            let mut create = false;
+            egui::Window::new("New rekordbox playlist")
+                .collapsible(false)
+                .resizable(false)
+                .open(&mut keep_open)
+                .show(ctx, |ui| {
+                    ui.label(format!(
+                        "Name for the playlist ({} song{}):",
+                        paths.len(),
+                        if paths.len() == 1 { "" } else { "s" }
+                    ));
+                    let edit = ui.text_edit_singleline(&mut name);
+                    edit.request_focus();
+                    let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                    if ui.button("Create and add").clicked() || enter {
+                        create = true;
+                    }
+                });
+            if create && !name.trim().is_empty() {
+                self.add_to_crate(&name, &paths);
+            } else if keep_open && !create {
+                self.rb_new = Some((name, paths));
+            }
+        }
+
+        if !self.show_rekordbox {
+            return;
+        }
+        let mut open = true;
+        let ok = self.palette.value_done;
+        let todo = self.palette.accent_text;
+        egui::Window::new("Rekordbox")
+            .open(&mut open)
+            .collapsible(false)
+            .default_width(560.0)
+            .show(ctx, |ui| {
+                ui.label(
+                    "Send songs from Qinip into rekordbox playlists. Right-click songs → \
+                     Add to Rekordbox playlist. Qinip never touches your rekordbox library \
+                     itself; you import what you want.",
+                );
+                ui.add_space(8.0);
+                ui.heading("One-time setup");
+
+                let step = |ui: &mut egui::Ui, done: bool, text: &str| {
+                    ui.horizontal_wrapped(|ui| {
+                        ui.label(
+                            egui::RichText::new(if done { "✔" } else { "●" })
+                                .color(if done { ok } else { todo })
+                                .strong(),
+                        );
+                        ui.label(text);
+                    });
+                };
+
+                let found = self.rb_setup.rekordbox_found();
+                step(
+                    ui,
+                    found,
+                    if found {
+                        "rekordbox is installed."
+                    } else {
+                        "rekordbox not found on this computer. Install rekordbox 6 or 7, open it once, then Check again."
+                    },
+                );
+
+                if self.rb_target.rekordbox_reads_it {
+                    step(ui, true, "Qinip writes its playlists to the file rekordbox already reads. Nothing to set.");
+                } else {
+                    step(
+                        ui,
+                        false,
+                        "Point rekordbox at Qinip's file: rekordbox → Preferences → Advanced → \
+                         Database → rekordbox xml → Imported Library → Browse, and pick this file:",
+                    );
+                    let path = self.rb_target.path.display().to_string();
+                    ui.horizontal(|ui| {
+                        ui.monospace(&path);
+                        if ui.small_button("Copy path").clicked() {
+                            ui.ctx().copy_text(path.clone());
+                        }
+                    });
+                }
+
+                match self.rb_setup.xml_list_visible {
+                    Some(true) => step(ui, true, "The \"rekordbox xml\" list is switched on in rekordbox."),
+                    _ => step(
+                        ui,
+                        false,
+                        "Switch on the list: rekordbox → Preferences → View → Layout → under \
+                         Media Browser tick \"rekordbox xml\". (rekordbox saves this when it \
+                         quits, so Qinip may only see the tick after you quit rekordbox once.)",
+                    ),
+                }
+
+                ui.horizontal(|ui| {
+                    if cfg!(target_os = "macos")
+                        && ui.button("Open rekordbox").clicked()
+                        && let Err(err) = file_ops::open_rekordbox()
+                    {
+                        self.status_message = err;
+                    }
+                    if ui.button("Check again").clicked() {
+                        self.refresh_rekordbox_setup();
+                    }
+                    if ui.button("Show the file").clicked() {
+                        let _ = self.export_rekordbox();
+                        if let Err(err) = file_ops::open_enclosing_folder(&self.rb_target.path) {
+                            self.status_message = err;
+                        }
+                    }
+                });
+
+                ui.add_space(8.0);
+                ui.heading("Each time you add songs");
+                ui.label("1. In rekordbox's left column, click the refresh icon on \"rekordbox xml\".");
+                ui.label("2. Open rekordbox xml → Playlists → Qinip.");
+                ui.label("3. Right-click your playlist → Import Playlist (or drag it onto your Playlists).");
+                ui.label(
+                    egui::RichText::new(
+                        "Imported it before? Delete the old copy in rekordbox first, or you get two. \
+                         Songs already in rekordbox keep their old BPM/key unless you select them in \
+                         the rekordbox xml playlist and choose Import To Collection.",
+                    )
+                    .weak(),
+                );
+
+                ui.add_space(8.0);
+                ui.heading("Your Qinip playlists");
+                if self.crates.crates.is_empty() {
+                    ui.label(egui::RichText::new("None yet. Right-click a song to start one.").weak());
+                }
+                let mut remove: Option<String> = None;
+                egui::Grid::new("rb_crates").num_columns(3).striped(true).show(ui, |ui| {
+                    for c in &self.crates.crates {
+                        ui.label(&c.name);
+                        ui.label(format!("{} songs", c.tracks.len()));
+                        if ui.small_button("Remove").on_hover_text(
+                            "Removes it from Qinip's list. Playlists you already imported stay in rekordbox.",
+                        ).clicked() {
+                            remove = Some(c.name.clone());
+                        }
+                        ui.end_row();
+                    }
+                });
+                if let Some(name) = remove {
+                    self.crates.remove_crate(&name);
+                    let _ = self.export_rekordbox();
+                }
+            });
+        if !open {
+            self.show_rekordbox = false;
+        }
     }
 
     fn apply_theme(&mut self, ctx: &egui::Context) {
@@ -1566,6 +1812,7 @@ impl eframe::App for QinipApp {
                 theme: self.theme,
                 repeat: self.repeat,
                 shuffle: self.shuffle,
+                crates: self.crates.clone(),
             },
         );
     }
@@ -1656,6 +1903,8 @@ impl eframe::App for QinipApp {
             }
         }
 
+        self.draw_rekordbox_windows(ui.ctx());
+
         if self.show_about {
             let mut open = true;
             egui::Window::new("About Qinip")
@@ -1727,6 +1976,10 @@ impl eframe::App for QinipApp {
                     })
                     .response
                     .on_hover_text("Colour theme");
+                if ui.button("Rekordbox").clicked() {
+                    self.refresh_rekordbox_setup();
+                    self.show_rekordbox = true;
+                }
                 if ui.button("About").clicked() {
                     self.show_about = true;
                 }
@@ -1792,6 +2045,9 @@ impl eframe::App for QinipApp {
             let mut pending_move = None;
             let mut pending_tags = None;
             let mut pending_open_folder = None;
+            // (row, Some(playlist) | None = new playlist)
+            let mut pending_rb: Option<(usize, Option<String>)> = None;
+            let crate_names = self.crates.names();
             let mut pending_sort: Option<SortColumn> = None;
 
             let avail = ui.available_width();
@@ -1954,6 +2210,29 @@ impl eframe::App for QinipApp {
                                         ui.close();
                                     }
                                     ui.separator();
+                                    let multi = self.selection.contains(index)
+                                        && self.selection.len() > 1;
+                                    let rb_label = if multi {
+                                        format!("Add {} selected to Rekordbox playlist", self.selection.len())
+                                    } else {
+                                        "Add to Rekordbox playlist".to_string()
+                                    };
+                                    ui.menu_button(rb_label, |ui| {
+                                        for name in &crate_names {
+                                            if ui.button(name).clicked() {
+                                                pending_rb = Some((index, Some(name.clone())));
+                                                ui.close();
+                                            }
+                                        }
+                                        if !crate_names.is_empty() {
+                                            ui.separator();
+                                        }
+                                        if ui.button("New playlist…").clicked() {
+                                            pending_rb = Some((index, None));
+                                            ui.close();
+                                        }
+                                    });
+                                    ui.separator();
                                     if ui.button("Open enclosing folder").clicked() {
                                         pending_open_folder = Some(index);
                                         ui.close();
@@ -2042,6 +2321,17 @@ impl eframe::App for QinipApp {
             }
             if let Some(index) = pending_tags {
                 self.write_tags_for(index);
+            }
+            if let Some((index, choice)) = pending_rb {
+                let paths: Vec<PathBuf> = self
+                    .context_targets(index)
+                    .into_iter()
+                    .filter_map(|i| self.playlist.tracks.get(i).map(|t| t.path.clone()))
+                    .collect();
+                match choice {
+                    Some(name) => self.add_to_crate(&name, &paths),
+                    None => self.rb_new = Some(("Qinip picks".to_string(), paths)),
+                }
             }
             if let Some(index) = pending_open_folder {
                 self.open_track_folder(index);

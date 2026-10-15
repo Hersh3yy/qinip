@@ -24,7 +24,7 @@ pub fn detect_key(audio: &DecodedAudio) -> KeyResult {
     let mut best_correlation = f32::NEG_INFINITY;
     let mut best_key = String::new();
 
-    for tonic in 0..12 {
+    for (tonic, note) in NOTE_NAMES.iter().enumerate() {
         let major_rotated = rotate(&MAJOR_PROFILE, tonic);
         let minor_rotated = rotate(&MINOR_PROFILE, tonic);
 
@@ -33,11 +33,11 @@ pub fn detect_key(audio: &DecodedAudio) -> KeyResult {
 
         if major_corr > best_correlation {
             best_correlation = major_corr;
-            best_key = format!("{} Major", NOTE_NAMES[tonic]);
+            best_key = format!("{note} Major");
         }
         if minor_corr > best_correlation {
             best_correlation = minor_corr;
-            best_key = format!("{} Minor", NOTE_NAMES[tonic]);
+            best_key = format!("{note} Minor");
         }
     }
 
@@ -75,21 +75,6 @@ pub fn to_camelot(key_name: &str) -> Option<String> {
     };
 
     Some(format!("{number}{mode}"))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::to_camelot;
-
-    #[test]
-    fn camelot_common_keys() {
-        assert_eq!(to_camelot("C Major").as_deref(), Some("8B"));
-        assert_eq!(to_camelot("A Minor").as_deref(), Some("8A"));
-        assert_eq!(to_camelot("G Major").as_deref(), Some("9B"));
-        assert_eq!(to_camelot("E Minor").as_deref(), Some("9A"));
-        assert_eq!(to_camelot("F Major").as_deref(), Some("7B"));
-        assert_eq!(to_camelot("D Minor").as_deref(), Some("7A"));
-    }
 }
 
 fn compute_chroma_vector(mono: &[f32], sample_rate: u32) -> [f32; 12] {
@@ -163,4 +148,19 @@ fn pearson_correlation(a: &[f32; 12], b: &[f32; 12]) -> f32 {
     }
 
     numerator / (denom_a.sqrt() * denom_b.sqrt()).max(0.0001)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::to_camelot;
+
+    #[test]
+    fn camelot_common_keys() {
+        assert_eq!(to_camelot("C Major").as_deref(), Some("8B"));
+        assert_eq!(to_camelot("A Minor").as_deref(), Some("8A"));
+        assert_eq!(to_camelot("G Major").as_deref(), Some("9B"));
+        assert_eq!(to_camelot("E Minor").as_deref(), Some("9A"));
+        assert_eq!(to_camelot("F Major").as_deref(), Some("7B"));
+        assert_eq!(to_camelot("D Minor").as_deref(), Some("7A"));
+    }
 }

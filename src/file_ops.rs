@@ -39,6 +39,23 @@ pub fn open_enclosing_folder(path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// Launch rekordbox (macOS, by bundle id so the "rekordbox 7" folder name
+/// doesn't matter).
+pub fn open_rekordbox() -> Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        Command::new("open")
+            .args(["-b", "com.pioneerdj.rekordboxdj"])
+            .spawn()
+            .map_err(|err| format!("couldn't open rekordbox: {err}"))?;
+        Ok(())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        Err("Open rekordbox from the Start menu.".to_string())
+    }
+}
+
 /// Move a file, falling back to copy-then-delete when `rename` can't cross
 /// filesystems (USB stick, external SSD, network share). `rename` is atomic
 /// on one volume; across volumes the OS refuses it with `CrossesDevices`, so
