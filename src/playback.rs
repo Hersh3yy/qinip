@@ -264,6 +264,12 @@ impl PlaybackEngine {
         Ok(())
     }
 
+    /// Drop a staged gapless track (e.g. shuffle/repeat changed after preload).
+    pub fn clear_queued(&self) -> anyhow::Result<()> {
+        self.cmd_tx.send(PlaybackCommand::ClearNext)?;
+        Ok(())
+    }
+
     /// `true` once after the audio thread auto-swapped to a queued track.
     pub fn take_auto_advanced(&self) -> bool {
         self.shared

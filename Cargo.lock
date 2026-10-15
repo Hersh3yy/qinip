@@ -3088,6 +3088,7 @@ dependencies = [
  "cpal",
  "eframe",
  "egui",
+ "fastrand",
  "id3",
  "image",
  "objc2 0.6.4",

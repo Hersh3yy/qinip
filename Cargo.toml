@@ -26,6 +26,7 @@ path = "src/bin/analyze.rs"
 
 [dependencies]
 anyhow = "1.0.103"
+fastrand = "2"
 serde = { version = "1", features = ["derive"] }
 # `builtin` compiles bundled aubio C sources; avoids Homebrew header layout mismatch
 # (`include/aubio/aubio.h` vs bindgen's `#include <aubio.h>`) on Apple Silicon.

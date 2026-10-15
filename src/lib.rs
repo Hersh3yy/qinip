@@ -14,5 +14,6 @@ pub mod knob;
 pub mod tags;
 pub mod file_ops;
 pub mod transport;
+pub mod theme;
 pub mod media;
 pub mod macos_icon;

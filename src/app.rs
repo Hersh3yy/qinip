@@ -18,6 +18,7 @@ use crate::selection::Selection;
 use crate::playback::PlaybackEngine;
 use crate::playlist::{AnalysisState, Playlist, SortColumn, SortDirection};
 use crate::tags;
+use crate::theme::{Palette, ThemeChoice};
 use crate::transport::{beat_bar_indicator, transport_button};
 use crate::worker::{AnalysisWorker, WorkerJob, WorkerUpdate};
 use souvlaki::MediaControlEvent;
@@ -78,6 +79,39 @@ struct Settings {
     /// Opt-in: write analyzed BPM/Key into the MP3's ID3 tags automatically.
     /// Off by default so Qinip never edits someone's files unasked.
     auto_write_tags: bool,
+    theme: ThemeChoice,
+    repeat: RepeatMode,
+    shuffle: bool,
+}
+
+/// What happens when the playing track ends (and what Next does).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+enum RepeatMode {
+    /// Stop after the last track.
+    #[default]
+    Off,
+    /// Wrap from the last track back to the first.
+    All,
+    /// Play the same track again (manual Next still moves on).
+    One,
+}
+
+impl RepeatMode {
+    fn cycle(self) -> Self {
+        match self {
+            RepeatMode::Off => RepeatMode::All,
+            RepeatMode::All => RepeatMode::One,
+            RepeatMode::One => RepeatMode::Off,
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            RepeatMode::Off => "Repeat off",
+            RepeatMode::All => "Repeat all",
+            RepeatMode::One => "Repeat one",
+        }
+    }
 }
 
 impl Default for Settings {
@@ -86,6 +120,9 @@ impl Default for Settings {
             volume: 0.85,
             autoplay: true,
             auto_write_tags: false,
+            theme: ThemeChoice::System,
+            repeat: RepeatMode::Off,
+            shuffle: false,
         }
     }
 }
@@ -113,6 +150,20 @@ pub struct QinipApp {
     autoplay: bool,
     auto_write_tags: bool,
     show_about: bool,
+    theme: ThemeChoice,
+    /// Colours for this frame (resolved from `theme` + the OS setting).
+    palette: Palette,
+    /// Last palette pushed into egui, so visuals are only rebuilt on change.
+    applied_palette: Option<Palette>,
+    repeat: RepeatMode,
+    shuffle: bool,
+    /// The track Next/autoplay will go to, chosen once so the gapless preload
+    /// and the actual advance agree (matters for shuffle). Stored by path so
+    /// it survives sorting; cleared whenever the queue context changes.
+    upcoming: Option<PathBuf>,
+    /// Tracks played since shuffle went on: avoids repeats until every track
+    /// had a turn, and lets Previous walk back through the shuffle order.
+    history: Vec<PathBuf>,
     was_playing: bool,
     last_listen_at: Option<f64>,
     /// When set, show a confirm dialog before deleting this playlist index from disk.
@@ -139,7 +190,6 @@ impl QinipApp {
             eprintln!("[dev] tip: use `cargo run --release` for ~18x faster analysis");
         }
 
-        cc.egui_ctx.set_visuals(hardware_theme_visuals());
 
         crate::macos_icon::set_dock_icon();
 
@@ -188,6 +238,13 @@ impl QinipApp {
             autoplay: settings.autoplay,
             auto_write_tags: settings.auto_write_tags,
             show_about: false,
+            theme: settings.theme,
+            palette: settings.theme.palette(system_dark(&cc.egui_ctx)),
+            applied_palette: None,
+            repeat: settings.repeat,
+            shuffle: settings.shuffle,
+            upcoming: None,
+            history: Vec::new(),
             was_playing: false,
             last_listen_at: None,
             confirm_delete: None,
@@ -316,6 +373,7 @@ impl QinipApp {
     }
 
     fn load_folder(&mut self, folder: PathBuf) {
+        self.forget_upcoming();
         let added = self.playlist.append_folder(&folder);
         self.status_message = format!(
             "Added {added} tracks from {} — analyzing…",
@@ -326,6 +384,7 @@ impl QinipApp {
     }
 
     fn load_paths(&mut self, paths: Vec<PathBuf>) {
+        self.forget_upcoming();
         let added = self.playlist.append_paths(paths);
         self.status_message = format!("Added {added} tracks — analyzing…");
         self.analyze_pending();
@@ -458,6 +517,10 @@ impl QinipApp {
         self.selection.select_only(index);
         self.last_listen_at = None;
         self.autoplay_preloaded = false;
+        self.upcoming = None;
+        if self.shuffle && self.history.last() != Some(&path) {
+            self.history.push(path.clone());
+        }
         self.clear_loop();
         self.was_playing = self
             .playlist
@@ -469,12 +532,24 @@ impl QinipApp {
         self.sync_system_media();
     }
 
+    /// Next button / media key: always moves on, even in Repeat one.
     fn play_next(&mut self) {
+        self.advance(true);
+    }
+
+    /// Go to the upcoming track. `manual` = the user asked (Next button);
+    /// otherwise it's autoplay at the end of a track, where Repeat one replays.
+    fn advance(&mut self, manual: bool) {
         let Some(current) = self.playing_track.or(self.selected()) else {
             return;
         };
-        let next = current + 1;
-        if next < self.playlist.tracks.len() {
+        let next = if manual {
+            self.forget_upcoming();
+            self.choose_next(current, true)
+        } else {
+            self.upcoming_index(current)
+        };
+        if let Some(next) = next {
             dev::log(format!("next → #{next}"));
             self.request_play(next);
         } else {
@@ -490,9 +565,98 @@ impl QinipApp {
         let Some(current) = self.playing_track.or(self.selected()) else {
             return;
         };
-        if current > 0 {
-            dev::log(format!("previous → #{}", current - 1));
-            self.request_play(current - 1);
+        // In shuffle, Previous walks back through what was actually played.
+        if self.shuffle && self.history.len() >= 2 {
+            self.history.pop(); // the current track
+            if let Some(index) = self
+                .history
+                .pop()
+                .and_then(|path| self.playlist.index_of(&path))
+            {
+                dev::log(format!("previous (shuffle history) → #{index}"));
+                self.request_play(index);
+                return;
+            }
+        }
+        let len = self.playlist.tracks.len();
+        let previous = if current > 0 {
+            Some(current - 1)
+        } else if self.repeat == RepeatMode::All && len > 0 {
+            Some(len - 1)
+        } else {
+            None
+        };
+        if let Some(previous) = previous {
+            dev::log(format!("previous → #{previous}"));
+            self.request_play(previous);
+        }
+    }
+
+    /// Pick the track after `current` under the repeat/shuffle rules.
+    /// `manual` treats Repeat one like Repeat all (the user pressed Next).
+    fn choose_next(&self, current: usize, manual: bool) -> Option<usize> {
+        let tracks = &self.playlist.tracks;
+        let played = |i: usize| self.history.contains(&tracks[i].path);
+        let pool = next_candidates(current, tracks.len(), self.repeat, self.shuffle, manual, played);
+        match pool.len() {
+            0 => None,
+            1 => Some(pool[0]),
+            n => Some(pool[fastrand::usize(..n)]),
+        }
+    }
+
+    /// The autoplay target, chosen once and remembered (see `upcoming`).
+    fn upcoming_index(&mut self, current: usize) -> Option<usize> {
+        if let Some(index) = self.upcoming.as_ref().and_then(|p| self.playlist.index_of(p)) {
+            return Some(index);
+        }
+        let next = self.choose_next(current, false)?;
+        self.upcoming = Some(self.playlist.tracks[next].path.clone());
+        Some(next)
+    }
+
+    /// Drop the remembered upcoming track (and any gapless preload of it),
+    /// e.g. after shuffle/repeat changes, a sort, or a removal.
+    fn forget_upcoming(&mut self) {
+        self.upcoming = None;
+        if self.autoplay_preloaded {
+            let _ = self.playback.clear_queued();
+            self.autoplay_preloaded = false;
+        }
+    }
+
+    fn toggle_shuffle(&mut self) {
+        self.shuffle = !self.shuffle;
+        self.history.clear();
+        if self.shuffle
+            && let Some(path) = self
+                .playing_track
+                .and_then(|i| self.playlist.tracks.get(i))
+                .map(|t| t.path.clone())
+        {
+            self.history.push(path);
+        }
+        self.forget_upcoming();
+        self.status_message = if self.shuffle { "Shuffle on." } else { "Shuffle off." }.to_string();
+    }
+
+    fn cycle_repeat(&mut self) {
+        self.repeat = self.repeat.cycle();
+        self.forget_upcoming();
+        self.status_message = format!("{}.", self.repeat.label());
+    }
+
+    fn apply_theme(&mut self, ctx: &egui::Context) {
+        self.palette = self.theme.palette(system_dark(ctx));
+        if self.applied_palette != Some(self.palette) {
+            let theme = if self.palette.is_dark {
+                egui::Theme::Dark
+            } else {
+                egui::Theme::Light
+            };
+            ctx.set_theme(theme);
+            ctx.set_visuals_of(theme, self.palette.visuals());
+            self.applied_palette = Some(self.palette);
         }
     }
 
@@ -539,6 +703,7 @@ impl QinipApp {
     }
 
     fn apply_playlist_sort(&mut self) {
+        self.forget_upcoming();
         let playing_path = self
             .playing_track
             .and_then(|i| self.playlist.tracks.get(i).map(|t| t.path.clone()));
@@ -599,6 +764,10 @@ impl QinipApp {
         let Some(removed) = self.playlist.remove_at(index) else {
             return;
         };
+        if self.upcoming.as_ref() == Some(&removed.path) {
+            self.forget_upcoming();
+        }
+        self.history.retain(|p| p != &removed.path);
 
         self.audio_cache.remove(&removed.path);
         self.waveform_cache.remove(&removed.path);
@@ -942,7 +1111,7 @@ impl QinipApp {
             self.was_playing = false;
             self.last_listen_at = None;
             self.autoplay_preloaded = false;
-            self.play_next();
+            self.advance(false);
             return true;
         }
 
@@ -957,10 +1126,9 @@ impl QinipApp {
         let Some(current) = self.playing_track else {
             return;
         };
-        let next = current + 1;
-        if next >= self.playlist.tracks.len() {
+        let Some(next) = self.upcoming_index(current) else {
             return;
-        }
+        };
         let path = self.playlist.tracks[next].path.clone();
         let Some(audio) = self.audio_cache.get(&path).map(Arc::clone) else {
             return;
@@ -973,12 +1141,16 @@ impl QinipApp {
 
     /// Audio thread already swapped to the queued track — update UI state to match.
     fn on_auto_advanced_to_next(&mut self) {
-        let Some(current) = self.playing_track else {
+        // The audio thread swapped to whatever we preloaded: `upcoming`.
+        let Some(next) = self
+            .upcoming
+            .take()
+            .and_then(|path| self.playlist.index_of(&path))
+        else {
             return;
         };
-        let next = current + 1;
-        if next >= self.playlist.tracks.len() {
-            return;
+        if self.shuffle {
+            self.history.push(self.playlist.tracks[next].path.clone());
         }
 
         self.playing_track = Some(next);
@@ -1118,6 +1290,19 @@ impl QinipApp {
                 if transport_button(ui, "+10", cyan, can_transport, false) {
                     self.seek_relative(10.0);
                 }
+                if transport_button(ui, "🔀", green, can_play, self.shuffle) {
+                    self.toggle_shuffle();
+                }
+                let repeat_icon = if self.repeat == RepeatMode::One { "🔂" } else { "🔁" };
+                if transport_button(
+                    ui,
+                    repeat_icon,
+                    green,
+                    can_play,
+                    self.repeat != RepeatMode::Off,
+                ) {
+                    self.cycle_repeat();
+                }
 
                 ui.separator();
 
@@ -1137,7 +1322,7 @@ impl QinipApp {
                 ui.separator();
 
                 let position = self.playback.status().position_secs();
-                beat_bar_indicator(ui, position, self.current_bpm());
+                beat_bar_indicator(ui, position, self.current_bpm(), &self.palette);
 
                 ui.separator();
                 self.draw_volume(ui);
@@ -1215,7 +1400,7 @@ impl QinipApp {
         let (rect, response) = ui.allocate_exact_size(desired, egui::Sense::CLICK);
         let painter = ui.painter_at(rect);
 
-        painter.rect_filled(rect, 4.0, egui::Color32::from_gray(28));
+        painter.rect_filled(rect, 4.0, self.palette.screen_bg);
 
         let layers = [
             (&bands.low, self.eq.low, BAND_COLORS[0]),
@@ -1260,7 +1445,7 @@ impl QinipApp {
             let x = rect.left() + fraction * width;
             painter.line_segment(
                 [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
-                egui::Stroke::new(2.0, egui::Color32::WHITE),
+                egui::Stroke::new(2.0, self.palette.playhead),
             );
 
             if self.loop_beats.is_some() {
@@ -1304,10 +1489,10 @@ impl QinipApp {
         };
 
         let fill = match &track.analysis {
-            AnalysisState::Failed(_) => egui::Color32::from_rgb(90, 30, 30),
-            AnalysisState::Done => egui::Color32::from_rgb(35, 70, 45),
-            AnalysisState::Loading | AnalysisState::Analyzing => egui::Color32::from_rgb(80, 70, 20),
-            AnalysisState::Pending => egui::Color32::from_gray(45),
+            AnalysisState::Failed(_) => self.palette.fill_failed,
+            AnalysisState::Done => self.palette.fill_done,
+            AnalysisState::Loading | AnalysisState::Analyzing => self.palette.fill_busy,
+            AnalysisState::Pending => self.palette.fill_pending,
         };
 
         let progress = track.analysis_progress();
@@ -1321,7 +1506,7 @@ impl QinipApp {
         let response = response.on_hover_cursor(egui::CursorIcon::PointingHand);
 
         let painter = ui.painter_at(rect);
-        painter.rect_filled(rect, 3.0, egui::Color32::from_gray(28));
+        painter.rect_filled(rect, 3.0, self.palette.row_bg);
         let filled = egui::Rect::from_min_size(
             rect.min,
             egui::vec2(rect.width() * progress, rect.height()),
@@ -1331,12 +1516,12 @@ impl QinipApp {
         if selected {
             // Members of a multi-selection get an amber wash; the anchor row
             // keeps the crisp white outline so the focused track stays obvious.
-            let amber = egui::Color32::from_rgb(0xE8, 0xA9, 0x3C);
-            painter.rect_filled(rect, 3.0, amber.gamma_multiply(0.18));
+            let accent = self.palette.accent;
+            painter.rect_filled(rect, 3.0, accent.gamma_multiply(0.18));
             let (stroke_w, stroke_color) = if is_anchor {
-                (1.5, egui::Color32::WHITE)
+                (1.5, self.palette.focus_outline)
             } else {
-                (1.0, amber)
+                (1.0, accent)
             };
             painter.rect_stroke(
                 rect,
@@ -1351,7 +1536,7 @@ impl QinipApp {
             painter.rect_stroke(
                 rect,
                 3.0,
-                egui::Stroke::new(1.0, egui::Color32::from_gray(120 + pulse as u8)),
+                egui::Stroke::new(1.0, self.palette.text_weak.gamma_multiply(0.7 + pulse / 133.0)),
                 egui::StrokeKind::Outside,
             );
         }
@@ -1361,7 +1546,7 @@ impl QinipApp {
             egui::Align2::LEFT_CENTER,
             label,
             egui::FontId::proportional(13.0),
-            egui::Color32::WHITE,
+            self.palette.row_text,
         );
 
         response
@@ -1378,11 +1563,15 @@ impl eframe::App for QinipApp {
                 volume: self.volume,
                 autoplay: self.autoplay,
                 auto_write_tags: self.auto_write_tags,
+                theme: self.theme,
+                repeat: self.repeat,
+                shuffle: self.shuffle,
             },
         );
     }
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.apply_theme(ctx);
         self.playback.poll();
         self.poll_worker();
         self.poll_system_media();
@@ -1504,7 +1693,7 @@ impl eframe::App for QinipApp {
                         egui::RichText::new(format!(
                             "No audio output ({err}). Connect speakers or headphones, then retry."
                         ))
-                        .color(egui::Color32::from_rgb(0xE8, 0xA9, 0x3C)),
+                        .color(self.palette.accent_text),
                     );
                     if ui.button("Retry audio").clicked() {
                         self.retry_audio_output();
@@ -1529,6 +1718,15 @@ impl eframe::App for QinipApp {
                          default: your files are not changed unless you turn this on or \
                          use right-click → Write BPM/Key tags.",
                     );
+                egui::ComboBox::from_id_salt("theme_picker")
+                    .selected_text(self.theme.label())
+                    .show_ui(ui, |ui| {
+                        for choice in ThemeChoice::ALL {
+                            ui.selectable_value(&mut self.theme, choice, choice.label());
+                        }
+                    })
+                    .response
+                    .on_hover_text("Colour theme");
                 if ui.button("About").clicked() {
                     self.show_about = true;
                 }
@@ -1786,12 +1984,12 @@ impl eframe::App for QinipApp {
                                 playlist_cell_label(ui, track.duration_label(), cols.duration);
 
                                 let value_color = match &track.analysis {
-                                    AnalysisState::Failed(_) => egui::Color32::RED,
-                                    AnalysisState::Done => egui::Color32::LIGHT_GREEN,
+                                    AnalysisState::Failed(_) => self.palette.value_failed,
+                                    AnalysisState::Done => self.palette.value_done,
                                     AnalysisState::Loading | AnalysisState::Analyzing => {
-                                        egui::Color32::YELLOW
+                                        self.palette.value_busy
                                     }
-                                    AnalysisState::Pending => egui::Color32::GRAY,
+                                    AnalysisState::Pending => self.palette.value_pending,
                                 };
 
                                 playlist_cell_rich(
@@ -1861,7 +2059,7 @@ struct ColumnHeaderResult {
 /// egui's Grid has no colspan, so the label sits in the first cell and the
 /// caller ends the row; the amber rule underneath reads as a separator.
 fn draw_folder_header(ui: &mut egui::Ui, source: Option<&Path>, count: usize) {
-    let amber = egui::Color32::from_rgb(0xE8, 0xA9, 0x3C);
+    let amber = ui.visuals().warn_fg_color;
     let name = match source {
         Some(folder) => Playlist::source_folder_label(folder),
         None => "Dropped files".to_string(),
@@ -1901,7 +2099,7 @@ fn draw_column_header(
     let _ = label_resp.on_hover_cursor(egui::CursorIcon::PointingHand);
     let is_sorted = active_sort.is_some_and(|(col, _)| col == column);
     let header_color = if is_sorted {
-        egui::Color32::from_rgb(0xE8, 0xA9, 0x3C)
+        ui.visuals().warn_fg_color
     } else {
         ui.visuals().text_color()
     };
@@ -1921,7 +2119,7 @@ fn draw_column_header(
             egui::pos2(resize_rect.center().x, resize_rect.top() + 2.0),
             egui::pos2(resize_rect.center().x, resize_rect.bottom() - 2.0),
         ],
-        egui::Stroke::new(1.0, egui::Color32::from_gray(90)),
+        egui::Stroke::new(1.0, ui.visuals().weak_text_color()),
     );
 
     let mut new_width = width;
@@ -1981,59 +2179,53 @@ pub fn load_app_icon() -> egui::IconData {
     }
 }
 
-/// Custom look for the app, applied once at startup instead of egui's
-/// generic default dark theme — dark anodized-aluminum panels with a warm
-/// amber accent, in the spirit of a hardware mixer's control surface
-/// (see `knob.rs` for the matching EQ knobs).
-fn hardware_theme_visuals() -> egui::Visuals {
-    let panel = egui::Color32::from_rgb(0x2A, 0x2C, 0x2E);
-    let recessed = egui::Color32::from_rgb(0x1C, 0x1D, 0x1E);
-    let control_rest = egui::Color32::from_rgb(0x3A, 0x3C, 0x3E);
-    let control_hover = egui::Color32::from_rgb(0x48, 0x4A, 0x4C);
-    let amber = egui::Color32::from_rgb(0xE8, 0xA9, 0x3C);
-    let text = egui::Color32::from_rgb(0xE4, 0xE4, 0xE2);
-    let corner = egui::CornerRadius::same(4);
+/// Which tracks may come after `current`. Empty = stop. Sequential play
+/// yields exactly one; shuffle yields every eligible track (caller picks one
+/// at random). `played(i)` = track `i` already had its turn this shuffle cycle.
+fn next_candidates(
+    current: usize,
+    len: usize,
+    repeat: RepeatMode,
+    shuffle: bool,
+    manual: bool,
+    played: impl Fn(usize) -> bool,
+) -> Vec<usize> {
+    if len == 0 {
+        return Vec::new();
+    }
+    if repeat == RepeatMode::One && !manual {
+        return vec![current];
+    }
+    let wrap = repeat != RepeatMode::Off;
 
-    let mut visuals = egui::Visuals::dark();
-
-    visuals.panel_fill = panel;
-    visuals.window_fill = panel;
-    visuals.extreme_bg_color = recessed;
-    visuals.faint_bg_color = control_rest;
-    visuals.override_text_color = Some(text);
-    visuals.hyperlink_color = amber;
-    visuals.selection.bg_fill = amber.gamma_multiply(0.45);
-    visuals.selection.stroke.color = amber;
-    visuals.warn_fg_color = amber;
-
-    for widget in [
-        &mut visuals.widgets.noninteractive,
-        &mut visuals.widgets.inactive,
-        &mut visuals.widgets.hovered,
-        &mut visuals.widgets.active,
-        &mut visuals.widgets.open,
-    ] {
-        widget.corner_radius = corner;
+    if shuffle {
+        if len == 1 {
+            return if wrap { vec![current] } else { Vec::new() };
+        }
+        let unplayed: Vec<usize> = (0..len).filter(|&i| i != current && !played(i)).collect();
+        if !unplayed.is_empty() {
+            return unplayed;
+        }
+        // Everyone had a turn: a fresh cycle if wrapping, else stop.
+        return if wrap {
+            (0..len).filter(|&i| i != current).collect()
+        } else {
+            Vec::new()
+        };
     }
 
-    visuals.widgets.noninteractive.bg_fill = panel;
-    visuals.widgets.noninteractive.weak_bg_fill = panel;
+    if current + 1 < len {
+        vec![current + 1]
+    } else if wrap {
+        vec![0]
+    } else {
+        Vec::new()
+    }
+}
 
-    visuals.widgets.inactive.bg_fill = control_rest;
-    visuals.widgets.inactive.weak_bg_fill = control_rest;
-
-    visuals.widgets.hovered.bg_fill = control_hover;
-    visuals.widgets.hovered.weak_bg_fill = control_hover;
-    visuals.widgets.hovered.bg_stroke.color = amber;
-
-    visuals.widgets.active.bg_fill = amber;
-    visuals.widgets.active.weak_bg_fill = amber;
-    visuals.widgets.active.fg_stroke.color = recessed;
-
-    visuals.widgets.open.bg_fill = control_hover;
-    visuals.widgets.open.weak_bg_fill = control_hover;
-
-    visuals
+/// The OS light/dark preference, if the platform reports one.
+fn system_dark(ctx: &egui::Context) -> Option<bool> {
+    ctx.system_theme().map(|theme| theme == egui::Theme::Dark)
 }
 
 /// Runs the actual BPM + key detection, catching any panic so a single
@@ -2055,4 +2247,39 @@ fn format_clock(secs: f64) -> String {
     let minutes = total / 60;
     let seconds = total % 60;
     format!("{minutes}:{seconds:02}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const NONE_PLAYED: fn(usize) -> bool = |_| false;
+
+    #[test]
+    fn sequential_stops_at_end_unless_repeat_all() {
+        assert_eq!(next_candidates(1, 3, RepeatMode::Off, false, false, NONE_PLAYED), vec![2]);
+        assert!(next_candidates(2, 3, RepeatMode::Off, false, false, NONE_PLAYED).is_empty());
+        assert_eq!(next_candidates(2, 3, RepeatMode::All, false, false, NONE_PLAYED), vec![0]);
+    }
+
+    #[test]
+    fn repeat_one_replays_on_autoplay_but_next_moves_on() {
+        assert_eq!(next_candidates(1, 3, RepeatMode::One, false, false, NONE_PLAYED), vec![1]);
+        assert_eq!(next_candidates(1, 3, RepeatMode::One, false, true, NONE_PLAYED), vec![2]);
+        // Manual Next on the last track with Repeat one wraps like Repeat all.
+        assert_eq!(next_candidates(2, 3, RepeatMode::One, false, true, NONE_PLAYED), vec![0]);
+    }
+
+    #[test]
+    fn shuffle_skips_current_and_already_played() {
+        let played = |i: usize| i == 0 || i == 3;
+        assert_eq!(next_candidates(1, 5, RepeatMode::Off, true, false, played), vec![2, 4]);
+    }
+
+    #[test]
+    fn shuffle_cycle_ends_or_restarts() {
+        let all_played = |_: usize| true;
+        assert!(next_candidates(1, 4, RepeatMode::Off, true, false, all_played).is_empty());
+        assert_eq!(next_candidates(1, 4, RepeatMode::All, true, false, all_played), vec![0, 2, 3]);
+    }
 }

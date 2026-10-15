@@ -1,5 +1,6 @@
 //! CDJ-style transport buttons — brushed-metal look with a colored glow ring.
 
+use crate::theme::Palette;
 use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, RichText, Sense, Stroke, Ui, Vec2};
 
 /// Which beat (1–4) within the current 4/4 bar, from playback position + BPM.
@@ -13,9 +14,11 @@ pub fn beat_in_bar(position_secs: f64, bpm: f32) -> u8 {
 }
 
 /// CDJ-style bar position: four stacked ticks + beat number + BPM.
-pub fn beat_bar_indicator(ui: &mut Ui, position_secs: f64, bpm: Option<f32>) {
+pub fn beat_bar_indicator(ui: &mut Ui, position_secs: f64, bpm: Option<f32>, palette: &Palette) {
     let accent = Color32::from_rgb(76, 201, 240);
-    let dim = Color32::from_rgb(42, 44, 46);
+    let dim = palette.tick_dim;
+    let text = palette.text;
+    let weak = palette.text_weak;
     let bar_w = 22.0;
     let bar_h = 5.0;
     let gap = 3.0;
@@ -48,7 +51,7 @@ pub fn beat_bar_indicator(ui: &mut Ui, position_secs: f64, bpm: Option<f32>) {
                     Align2::LEFT_CENTER,
                     "—",
                     FontId::proportional(18.0),
-                    Color32::from_gray(80),
+                    weak,
                 );
                 return;
             };
@@ -81,14 +84,15 @@ pub fn beat_bar_indicator(ui: &mut Ui, position_secs: f64, bpm: Option<f32>) {
                 Align2::LEFT_CENTER,
                 current.to_string(),
                 FontId::proportional(18.0),
-                Color32::WHITE,
+                text,
             );
             painter.text(
                 Pos2::new(text_x, rect.center().y + 10.0),
                 Align2::LEFT_CENTER,
                 format!("{bpm:.1}"),
                 FontId::monospace(13.0),
-                accent,
+                // Bright cyan reads on dark panels; light panels need a deeper one.
+                if palette.is_dark { accent } else { Color32::from_rgb(0x1F, 0x6F, 0x86) },
             );
         });
     });
