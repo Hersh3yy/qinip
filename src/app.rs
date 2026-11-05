@@ -88,6 +88,18 @@ struct Settings {
 }
 
 /// What happens when the playing track ends (and what Next does).
+/// Modal state for "Move to folder…": a plain alert, or the replace/cancel
+/// prompt when the destination already has a file with that name.
+#[derive(Clone)]
+enum MoveDialog {
+    Alert(String),
+    NameCollision {
+        index: usize,
+        old_path: PathBuf,
+        new_path: PathBuf,
+    },
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 enum RepeatMode {
     /// Stop after the last track.
@@ -179,6 +191,7 @@ pub struct QinipApp {
     last_listen_at: Option<f64>,
     /// When set, show a confirm dialog before deleting this playlist index from disk.
     confirm_delete: Option<usize>,
+    move_dialog: Option<MoveDialog>,
     playlist_sort: Option<(SortColumn, SortDirection)>,
     playlist_columns: PlaylistColumns,
     /// True once we've queued the upcoming track for gapless autoplay.
@@ -266,6 +279,7 @@ impl QinipApp {
             was_playing: false,
             last_listen_at: None,
             confirm_delete: None,
+            move_dialog: None,
             playlist_sort: None,
             playlist_columns: PlaylistColumns::default(),
             autoplay_preloaded: false,
@@ -1048,6 +1062,33 @@ impl QinipApp {
         dev::log(format!("removed from playlist: {}", removed.path.display()));
     }
 
+    /// Empty the list and stop. Files on disk are untouched.
+    fn clear_playlist(&mut self) {
+        if self.playlist.tracks.is_empty() {
+            return;
+        }
+        let count = self.playlist.tracks.len();
+        let _ = self.playback.pause();
+        self.forget_upcoming();
+        self.clear_loop();
+        self.playlist = Playlist::new();
+        self.audio_cache.clear();
+        self.waveform_cache.clear();
+        self.selection.clear();
+        self.history.clear();
+        self.playing_track = None;
+        self.was_playing = false;
+        self.last_listen_at = None;
+        self.confirm_delete = None;
+        self.move_dialog = None;
+        self.rb_new = None;
+        self.autoplay_preloaded = false;
+        self.seek_slider = 0.0;
+        self.status_message = format!("Cleared playlist ({count} tracks)");
+        dev::log("playlist cleared");
+        self.sync_system_media();
+    }
+
     fn delete_from_disk(&mut self, index: usize) {
         let Some(path) = self.playlist.tracks.get(index).map(|t| t.path.clone()) else {
             return;
@@ -1068,12 +1109,53 @@ impl QinipApp {
         }
     }
 
+    fn show_move_alert(&mut self, message: impl Into<String>) {
+        let message = message.into();
+        self.status_message = message.clone();
+        self.move_dialog = Some(MoveDialog::Alert(message));
+    }
+
+    /// The file is at its new place: drop the row (and its caches) here. The
+    /// moved track leaves the playlist on purpose: "move" is how a DJ files a
+    /// keeper away, and the row would otherwise point at a changed path.
+    fn complete_move(&mut self, index: usize, old_path: &Path, new_path: &Path) {
+        let folder_label = new_path
+            .parent()
+            .and_then(|p| p.file_name())
+            .and_then(|s| s.to_str())
+            .unwrap_or("folder");
+        self.remove_from_playlist(index);
+        self.status_message = format!("Moved to {folder_label} (removed from playlist)");
+        dev::log(format!(
+            "moved {} → {}",
+            old_path.display(),
+            new_path.display()
+        ));
+    }
+
+    /// Rename, or copy-then-delete across volumes (`file_ops::move_file`).
+    fn try_move(&mut self, index: usize, old_path: PathBuf, new_path: PathBuf) {
+        match file_ops::move_file(&old_path, &new_path) {
+            Ok(()) => self.complete_move(index, &old_path, &new_path),
+            Err(err) => self.show_move_alert(format!("Move failed: {err}")),
+        }
+    }
+
+    fn replace_destination_and_move(&mut self, index: usize, old_path: PathBuf, new_path: PathBuf) {
+        if let Err(err) = std::fs::remove_file(&new_path) {
+            self.show_move_alert(format!("Could not replace existing file: {err}"));
+            return;
+        }
+        self.move_dialog = None;
+        self.try_move(index, old_path, new_path);
+    }
+
     fn move_to_folder(&mut self, index: usize) {
         let Some(old_path) = self.playlist.tracks.get(index).map(|t| t.path.clone()) else {
             return;
         };
         let Some(file_name) = old_path.file_name().map(|n| n.to_owned()) else {
-            self.status_message = "Move failed: invalid path".to_string();
+            self.show_move_alert("Move failed: invalid path");
             return;
         };
 
@@ -1086,42 +1168,80 @@ impl QinipApp {
 
         let new_path = folder.join(&file_name);
         if new_path == old_path {
-            self.status_message = "Already in that folder.".to_string();
+            self.show_move_alert("Already in that folder.");
             return;
         }
         if new_path.exists() {
-            self.status_message = format!(
-                "Move failed: {} already exists in destination",
-                file_name.to_string_lossy()
-            );
+            let name = file_name.to_string_lossy();
+            self.status_message = format!("Move blocked: {name} already exists in that folder");
+            self.move_dialog = Some(MoveDialog::NameCollision {
+                index,
+                old_path,
+                new_path,
+            });
             return;
         }
 
-        match file_ops::move_file(&old_path, &new_path) {
-            Ok(()) => {
-                if let Some(audio) = self.audio_cache.remove(&old_path) {
-                    self.audio_cache.insert(new_path.clone(), audio);
-                }
-                if let Some(wave) = self.waveform_cache.remove(&old_path) {
-                    self.waveform_cache.insert(new_path.clone(), wave);
-                }
-                if let Some(track) = self.playlist.tracks.get_mut(index) {
-                    track.path = new_path.clone();
-                }
-                self.select_track(index);
-                self.status_message = format!(
-                    "Moved to {}",
-                    folder.file_name().and_then(|s| s.to_str()).unwrap_or("folder")
-                );
-                dev::log(format!(
-                    "moved {} → {}",
-                    old_path.display(),
-                    new_path.display()
-                ));
+        self.try_move(index, old_path, new_path);
+    }
+
+    fn draw_move_dialog(&mut self, ctx: &egui::Context) {
+        let Some(dialog) = self.move_dialog.clone() else {
+            return;
+        };
+
+        let mut open = true;
+        match dialog {
+            MoveDialog::Alert(message) => {
+                egui::Window::new("Could not move track")
+                    .collapsible(false)
+                    .resizable(false)
+                    .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                    .open(&mut open)
+                    .show(ctx, |ui| {
+                        ui.label(message);
+                        if ui.button("OK").clicked() {
+                            self.move_dialog = None;
+                        }
+                    });
             }
-            Err(err) => {
-                self.status_message = format!("Move failed: {err}");
+            MoveDialog::NameCollision {
+                index,
+                old_path,
+                new_path,
+            } => {
+                let file_name = new_path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| "this file".to_string());
+                let danger = self.palette.value_failed;
+                egui::Window::new("File already exists")
+                    .collapsible(false)
+                    .resizable(false)
+                    .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+                    .open(&mut open)
+                    .show(ctx, |ui| {
+                        ui.label(format!(
+                            "A file named “{file_name}” is already in that folder."
+                        ));
+                        ui.label("The track was not moved and is still in your playlist.");
+                        ui.horizontal(|ui| {
+                            if ui.button("Cancel").clicked() {
+                                self.move_dialog = None;
+                            }
+                            if ui
+                                .button(egui::RichText::new("Replace file in folder").color(danger))
+                                .clicked()
+                            {
+                                self.replace_destination_and_move(index, old_path, new_path);
+                            }
+                        });
+                    });
             }
+        }
+
+        if !open {
+            self.move_dialog = None;
         }
     }
 
@@ -1903,6 +2023,7 @@ impl eframe::App for QinipApp {
             }
         }
 
+        self.draw_move_dialog(ui.ctx());
         self.draw_rekordbox_windows(ui.ctx());
 
         if self.show_about {
@@ -1958,6 +2079,12 @@ impl eframe::App for QinipApp {
                 {
                     self.load_folder(folder);
                 }
+
+                ui.add_enabled_ui(!self.playlist.tracks.is_empty(), |ui| {
+                    if ui.button("Clear Playlist").clicked() {
+                        self.clear_playlist();
+                    }
+                });
 
                 ui.checkbox(&mut self.autoplay, "Autoplay");
                 ui.checkbox(&mut self.auto_write_tags, "Write BPM/Key to files")

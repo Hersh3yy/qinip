@@ -3,3 +3,6 @@
 .DS_Store
 **/.DS_Store
 *.app
+
+# Local test audio only; never ship copyrighted tracks in the repo.
+test_audio_files/*.mp3

@@ -87,6 +87,7 @@ Then right-click → Open → Open.
 | **Cmd+A** (Ctrl+A) | Select every track; **Esc** collapses back to one |
 | **Double-click** or **Enter** | Play the selected track |
 | **Backspace** (Mac) / **Delete** | Remove the selected track(s) from the playlist only — **never deletes files** |
+| **Clear Playlist** | Empties the list and stops playback (files stay on disk) |
 | **Load Folder** / drop folders or files | **Adds** to the existing list (skips duplicates). Each folder becomes its own group with a header in the unsorted view; drop several at once and they all load. |
 | **Right-click** title | Context menu (see below) |
 | **Column header click** | Sort asc → desc → off (click again to cycle) |
@@ -99,7 +100,7 @@ Then right-click → Open → Open.
 | **Play** | Start the track |
 | **Remove from playlist** | Drop from the list only (file stays on disk) |
 | **Open enclosing folder** | Opens the containing folder in Finder / Explorer |
-| **Move to folder…** | Pick a destination; moves the MP3 on disk and updates the playlist path |
+| **Move to folder…** | Pick a destination; moves the MP3 on disk (works across drives) and removes it from the playlist. If a file with the same name exists there, you're asked whether to replace it |
 | **Write BPM/Key tags** | Writes analysis into the file's ID3 tags (`TBPM`, `TKEY`), only filling missing tags. Requires analysis finished |
 | **Delete from disk…** | Permanently deletes the MP3 after a confirm dialog — **cannot be undone** |
 

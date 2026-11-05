@@ -15,6 +15,7 @@ Work in progress goes under **Unreleased**. `scripts/release.sh` turns that sect
 - Volume fader with mute, next to the transport buttons.
 - Keyboard and headphone play/pause keys and macOS Now Playing (Control Center).
 - About window with license information.
+- Clear Playlist button (files stay on disk).
 
 ### Changed
 - Writing BPM/Key into your MP3 files is now opt-in (off by default). Qinip no longer changes your files unless you ask.
@@ -24,7 +25,7 @@ Work in progress goes under **Unreleased**. `scripts/release.sh` turns that sect
 
 ### Fixed
 - Qinip no longer crashes at launch when no audio output is available; it shows a Retry audio button.
-- Moving a song to a folder on another drive (USB stick, external disk) now works.
+- Moving a song to a folder on another drive (USB stick, external disk) now works. A moved song leaves the playlist, and if the destination already has a file with that name you are asked whether to replace it.
 - Transport buttons and the Bar readout are no longer cut off.
 
 ## [1.0.0] - 2026-07-21
