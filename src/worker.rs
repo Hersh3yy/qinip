@@ -5,6 +5,10 @@ use std::thread::{self, JoinHandle};
 
 use crate::decode::{decode_to_samples, DecodedAudio};
 use crate::dev;
+use crate::eq::{band_waveform_peaks, BandWaveform};
+
+/// Waveform resolution: min/max peaks per band across the track.
+const WAVEFORM_PEAKS: usize = 800;
 
 #[derive(Debug)]
 pub enum WorkerJob {
@@ -19,6 +23,9 @@ pub enum WorkerUpdate {
     TrackReady {
         path: PathBuf,
         audio: DecodedAudio,
+        /// Computed here, not on the UI thread: four filters over a whole
+        /// track take long enough to stall a frame.
+        peaks: BandWaveform,
         autoplay: bool,
     },
     Failed {
@@ -54,27 +61,29 @@ impl AnalysisWorker {
 }
 
 fn worker_loop(job_rx: Receiver<WorkerJob>, update_tx: Sender<WorkerUpdate>) {
-    let mut queue = VecDeque::new();
-    let mut priority: Option<WorkerJob> = None;
+    // Play requests go first, in the order they were made; a path already
+    // waiting is not queued twice.
+    let mut queue: VecDeque<WorkerJob> = VecDeque::new();
+    let mut priority: VecDeque<WorkerJob> = VecDeque::new();
 
     loop {
         while let Ok(job) = job_rx.try_recv() {
+            let path = job_path(&job);
             if job_is_autoplay(&job) {
-                priority = Some(job);
-            } else {
+                queue.retain(|j| job_path(j) != path);
+                if !priority.iter().any(|j| job_path(j) == path) {
+                    priority.push_back(job);
+                }
+            } else if !queue.iter().chain(priority.iter()).any(|j| job_path(j) == path) {
                 queue.push_back(job);
             }
         }
 
-        let job = if let Some(job) = priority.take() {
-            job
-        } else {
-            match queue.pop_front() {
-                Some(job) => job,
-                None => {
-                    thread::sleep(std::time::Duration::from_millis(20));
-                    continue;
-                }
+        let job = match priority.pop_front().or_else(|| queue.pop_front()) {
+            Some(job) => job,
+            None => {
+                thread::sleep(std::time::Duration::from_millis(20));
+                continue;
             }
         };
 
@@ -102,10 +111,15 @@ fn worker_loop(job_rx: Receiver<WorkerJob>, update_tx: Sender<WorkerUpdate>) {
         };
         dev::log_timing(&format!("decode {path_display}"), start);
 
+        let peak_start = std::time::Instant::now();
+        let peaks = band_waveform_peaks(&audio.downmix_to_mono(), audio.sample_rate, WAVEFORM_PEAKS);
+        dev::log_timing("band waveform peaks", peak_start);
+
         if update_tx
             .send(WorkerUpdate::TrackReady {
                 path,
                 audio,
+                peaks,
                 autoplay,
             })
             .is_err()
@@ -117,4 +131,10 @@ fn worker_loop(job_rx: Receiver<WorkerJob>, update_tx: Sender<WorkerUpdate>) {
 
 fn job_is_autoplay(job: &WorkerJob) -> bool {
     matches!(job, WorkerJob::LoadTrack { autoplay: true, .. })
+}
+
+fn job_path(job: &WorkerJob) -> &std::path::Path {
+    match job {
+        WorkerJob::LoadTrack { path, .. } => path,
+    }
 }

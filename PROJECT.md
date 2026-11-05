@@ -10,12 +10,12 @@
 # Qinip — cockpit
 
 **What it is** · Free MP3 pack-audition player for macOS/Windows: playlist, coloured 4-band waveform, EQ knobs, background BPM/key/Camelot analysis, gapless autoplay.
-**Stack** · Rust, egui/eframe (immediate-mode GUI), cpal (audio out), symphonia (MP3 decode), aubio (BPM/key), souvlaki (OS media controls), id3 (tag write).
-**Status** · 🟡 rough — v1.0.0 is the last release; everything since sits under Unreleased in CHANGELOG.md on the feature branch (17 tests, strict clippy clean). Next: Hiren test-drives, merge to `master`, cut v1.1.0 with `scripts/release.sh`. Mac builds ship un-notarized (no paid Apple account) with "Open Anyway" instructions.
+**Stack** · Rust, egui/eframe (immediate-mode GUI), cpal (audio out), symphonia (MP3 decode), rustfft (Qinip's own tempo + key detection), souvlaki (OS media controls), id3 (tag read/write), egui_kittest (headless UI tests).
+**Status** · 🟢 ready to cut 1.1.0 — the 2026-11-05 adversarial audit's launch blockers are fixed (Windows launch crash, low-sample-rate crash, shortcuts firing while typing, tag-wipe risk, unbounded memory, README leftovers); BPM is now within 0.1 of tagged values; 32 tests + headless UI renders of every theme pass; strict clippy clean; cross-checks for Windows. Not yet done by a human: a run of the Windows zip, media keys in the bundle. Mac ships un-notarized with "Open Anyway" instructions.
 **Repo** · git@github.com:Hersh3yy/qinip.git · working on `feat/multiselect-folders-media` (merge to `master` only when sure)
 **Hosting** · Desktop app. Distributed as GitHub Releases (`Qinip.app` zip for macOS arm64, `Qinip.exe` zip for Windows x64).
 **ClickUp** · not linked
-**Last assessed** · 2026-10-15
+**Last assessed** · 2026-11-05
 
 ---
 
@@ -25,7 +25,8 @@
 cargo run --release
 ```
 
-- `--release` matters: analysis (aubio) is ~18x faster than debug. Dev logging: `QINIP_DEV=1 cargo run --release`.
+- `--release` matters: analysis is ~18x faster than debug. Dev logging: `QINIP_DEV=1 cargo run --release`.
+- See the UI without a window: `QINIP_UI_RENDER_DIR=/tmp/qinip-ui cargo test --release --lib ui_tests` writes a PNG per screen and theme (`src/ui_tests.rs`, egui_kittest; `QINIP_UI_FOLDER=<folder>` loads real tracks).
 - Needs Rust 1.95+ (egui 0.36). `cargo run` is a bare binary, not the `.app`: media keys and the Dock icon behave differently; test those in the bundle (`bash scripts/package-macos.sh`).
 - Regenerate third-party licenses after dependency changes: `cargo about generate -c scripts/licenses/about.toml scripts/licenses/about.hbs > assets/THIRD_PARTY_LICENSES.html` (`cargo install cargo-about --locked --features cli` once).
 
@@ -38,12 +39,11 @@ cargo run --release
 
 ### Developer setup, Windows
 
-1. Install **Visual Studio Build Tools** with the "Desktop development with C++" workload (Rust's MSVC linker and aubio's C code need it): `winget install Microsoft.VisualStudio.2022.BuildTools`, then tick that workload in the installer.
-2. Install **LLVM** (aubio's bindgen needs libclang): `winget install LLVM.LLVM`, and set `LIBCLANG_PATH=C:\Program Files\LLVM\bin` (System → Environment Variables).
-3. Install **Rust** from rustup.rs (`rustup-init.exe`, default MSVC toolchain) and **Git** (`winget install Git.Git`).
-4. In Git Bash: `git clone https://github.com/Hersh3yy/qinip.git && cd qinip && cargo run --release`.
-5. Package: `bash scripts/package-windows.sh` → `target/release/qinip-windows-x64.zip`.
-6. No Windows machine? GitHub → Actions → Release → **Run workflow** on your branch builds the Windows zip as a downloadable artifact without publishing anything.
+1. Install **Visual Studio Build Tools** with the "Desktop development with C++" workload (Rust's MSVC linker needs it): `winget install Microsoft.VisualStudio.2022.BuildTools`, then tick that workload in the installer. No LLVM or C libraries anymore (aubio is gone since 1.1.0).
+2. Install **Rust** from rustup.rs (`rustup-init.exe`, default MSVC toolchain) and **Git** (`winget install Git.Git`).
+3. In Git Bash: `git clone https://github.com/Hersh3yy/qinip.git && cd qinip && cargo run --release`.
+4. Package: `bash scripts/package-windows.sh` → `target/release/qinip-windows-x64.zip`.
+5. No Windows machine? GitHub → Actions → Release → **Run workflow** on your branch builds the Windows zip as a downloadable artifact without publishing anything. From a Mac, `rustup target add x86_64-pc-windows-msvc && cargo check --target x86_64-pc-windows-msvc` at least proves it compiles.
 
 ### Branches and releases (the rules)
 
@@ -56,18 +56,20 @@ cargo run --release
 
 ## Status
 
-v1.0.0 is real and used: load folders of MP3s, sortable playlist, per-band coloured waveform, 4-band EQ, background BPM/key/Camelot, gapless autoplay, tag write-back, right-click track ops. On `feat/multiselect-folders-media`: the souvlaki media-controls WIP is committed as a fallback point, and on top of it multi-select (Shift/Cmd click, Cmd+A, Esc, batch Backspace), per-folder group headers in the load-order view, and multi-folder drop. `cargo check` green, no warnings, `cargo test` 6/6. A fresh ad-hoc-signed `Qinip.app` is built at `target/release/bundle/osx/`. Not yet verified by a human: media keys in the bundle, the new selection UX by feel. Release blocker for "trustworthy" is signing + notarization; the full plan is in `docs/release-and-code-quality.md`.
+v1.0.0 is the last public release (2026-07-21). Everything since is on `feat/multiselect-folders-media`, merged with `master` (Hiren's Clear Playlist + move dialog), listed under Unreleased in `CHANGELOG.md`, and ready for `./scripts/release.sh 1.1.0`. This session's audit-driven pass fixed the launch blockers (see Diary 2026-11-05), replaced aubio with Qinip's own tempogram (BPM within 0.1 of tags on all six test tracks; the beat phase drives the tempo light and loop snapping), reads BPM/key from file tags, added Red/Forest Green themes, and added headless UI tests that render every theme. Still unverified by a human: the Windows zip (it cross-compiles), media keys in the bundle. Licence stays GPL-3.0-or-later; with aubio gone it is now a choice, not an obligation.
 
 ## Issues
 
 | Sev | Issue | Where |
 |---|---|---|
-| serious | Pipeline is ready but no Developer ID cert exists yet, so builds are still ad-hoc. Blocked on Apple Developer enrollment (Hiren). | `scripts/package-macos.sh` |
-| serious | System play/pause / media keys: wiring is correct in code, but macOS only routes media keys to a bundled, registered Now Playing app. Untested by a human in `Qinip.app`. Verify in the bundle; if it still fails there, dig into souvlaki registration. | `src/media.rs`, `src/app.rs` (`poll_system_media`) |
-| warning | `playing_track` / `confirm_delete` are still raw indices that get hand-shifted on remove/sort (selection now goes through `Selection::remap`). A `TrackId` would delete that code. | `src/app.rs` (`remove_from_playlist`) |
-| warning | Resampling runs on the UI thread on Load when device rate ≠ file rate (the 44.1/48 kHz norm). Tens of ms stall per track. | `src/playback.rs:294` |
-| note | Worker polls with a 20 ms sleep instead of blocking on `recv()`. | `src/worker.rs:75` |
-| note | 7 clippy warnings, all minor (`Copy` clones, collapsible ifs, `impl Default`). | see docs |
+| serious | No human has run the Windows build. It cross-compiles and the launch crash (souvlaki needing an HWND) is fixed by passing the window handle, but media keys and the whole UI are untested there. | `src/app.rs` (`init_system_media`), CI Windows job |
+| serious | Mac builds are ad-hoc signed: users get the "Open Anyway" dance once. Needs the paid Apple Developer account or a sponsor. | `scripts/package-macos.sh` |
+| warning | `playing_track` / `confirm_delete` are raw indices hand-shifted on remove and cleared on sort; a `TrackId` would delete that code. | `src/app.rs` (`remove_from_playlist`) |
+| warning | Resampling runs on the UI thread on Load when device rate ≠ file rate (44.1 vs 48 kHz). Tens of ms stall per track. | `src/playback.rs` (`resolve_track_samples`) |
+| warning | A single big `app.rs` (~2,900 lines) holds state, logic and all drawing. | `src/app.rs` |
+| note | Worker polls with a 20 ms sleep instead of blocking on `recv()`. | `src/worker.rs` |
+| note | souvlaki pulls `block 0.1.6` (future-incompat warning). symphonia 0.6 and egui 0.37 held back (breaking). | `Cargo.lock` |
+| note | Drum & bass reads at half tempo (87 for a 174 track): the 2-beat lag is the stronger autocorrelation peak and the DJ-tempo prior agrees. A ×2 button or genre-aware range would fix it. | `src/bpm.rs` (`prior`) |
 
 ## Guide
 
@@ -76,8 +78,8 @@ Immediate-mode GUI: `eframe::App` for `QinipApp` runs every frame as `logic()` (
 The pieces:
 - **Playlist model** (`src/playlist.rs`): `Playlist { tracks: Vec<TrackEntry> }`. `TrackEntry` holds path, tags, analysis state, `load_order` (to restore the unsorted view), `source_folder` (which Load Folder / drop it came from; drives the group headers), and listen tracking (`listened_secs`, `played` at 20s). `append_folder`/`append_paths` walk MP3s, skip dupes, keep insertion order.
 - **Selection** (`src/selection.rs`): `Selection { anchor, set }`. The anchor is what single-row actions (Enter, waveform, transport) act on; the set is what Backspace removes. `remap` carries it across a sort, `after_remove` across a removal. Unit-tested.
-- **Playback** (`src/playback.rs`, `src/transport.rs`): cpal output thread fed via a ring buffer; `PlaybackEngine::status()` is the UI's read model (playing?, position, duration). EQ applied in the audio path.
-- **Analysis** (`src/worker.rs`, `src/bpm.rs`, `src/key.rs`, `src/decode.rs`, `src/waveform.rs`, `src/bands.rs`): background worker decodes + runs aubio for BPM and key, converts key to Camelot, and builds the per-band waveform; results arrive over channels and get merged into the matching `TrackEntry`.
+- **Playback** (`src/playback.rs`, `src/transport.rs`): a cpal output callback reads the shared track buffer (no allocation on the audio thread); `PlaybackEngine::status()` is the UI's read model (playing?, position, duration). EQ applied in the audio path. `silent()` is the no-device fallback.
+- **Analysis** (`src/worker.rs`, `src/bpm.rs`, `src/key.rs`, `src/tags.rs`, `src/decode.rs`, `src/eq.rs`): tags first (`read_analysis_tags`: TBPM/TKEY in any common notation); the worker decodes and builds the per-band waveform off the UI thread; a thread per track runs the tempogram (`bpm.rs`: onset envelope → autocorrelation → comb-filter phase) and chroma key detection (`key.rs`), results arrive over channels and merge into the `TrackEntry` without overwriting tagged values. Decoded audio is pruned to the playing + upcoming tracks.
 - **OS media** (`src/media.rs`, NEW): souvlaki `MediaControls`; `poll_system_media` (`src/app.rs:703`) drains events (Play/Pause/Toggle/Next/Prev/Seek) into engine calls; `sync_system_media` pushes title/artist/position/state back to Now Playing each frame while playing.
 - **Domain words**: *Camelot* = harmonic-mixing wheel code (e.g. 8A) derived from musical key. *Played* = a track that got ≥20s of actual playback (gates the autoplay chain). *load_order* = original append order, used as the "no sort" view.
 
@@ -130,6 +132,14 @@ sequenceDiagram
 
 🗣️ **Say it to a senior** — "Media keys are owned by the system's now-playing coordinator, so the fix isn't in our key handling, it's making sure we register as a proper bundled now-playing app and publish playback state."
 
+### Tempo from autocorrelation, not from a beat tracker
+
+🔭 **What it does** — `bpm.rs` turns the track into an onset-strength envelope (how much louder each frequency band got since the previous 6 ms frame, with the slow level changes subtracted) and correlates that envelope with a delayed copy of itself. The delay at which it matches itself best is the beat period; a parabola through the three points around that peak gives the period to a fraction of a frame, which is why the result lands within 0.1 BPM of the tags. A comb filter (sum the envelope at `phase + k·period` for every phase) then finds where the beats fall, which the tempo light and the loop buttons use.
+
+⚖️ **Why this way** — aubio's beat tracker was tried first and read 1.5–2.4 % high on every tagged test track: its running period drifts and periodically re-syncs, and no averaging of its beats undoes that. The autocorrelation looks at the whole track at once and has no tracking state to drift. Dropping aubio also removed the only C dependency (and the GPL obligation).
+
+🗣️ **Say it to a senior** — "We don't track beats, we measure the period: autocorrelate the onset envelope, pick the peak in the 70–180 BPM window, refine it with a parabola, then recover the phase with a comb filter."
+
 ### Batch removal has to run high index to low
 
 🔭 **What it does** — Tracks live in a `Vec`, so removing index `i` shifts every later index down by one. Deleting a multi-selection by ascending index corrupts the rest of the selection. Removing in descending order keeps the not-yet-removed indices valid.
@@ -158,11 +168,13 @@ Release is next week. Order is risk reduced per hour; full detail per item in `d
 - [x] No startup panic without audio output: silent engine + "Retry audio" banner; media controls optional. <!-- id:r3 cu:123kjkdmpxk -->
 - [x] `move_to_folder` uses `file_ops::move_file` (copy-then-remove fallback across volumes, tested). <!-- id:r4 cu:123kjkdmpxm -->
 - [ ] `TrackId` identity for `playing_track` / `confirm_delete`; delete the index-shifting code. <!-- id:r6 cu:123kjkdmpxn -->
-- [ ] Unit tests for `remove_from_playlist`, `compare_tracks`, `beat_in_bar`, `resample_interleaved`. <!-- id:r7 cu:123kjkdmpxp -->
+- [ ] Unit tests for `remove_from_playlist`, `compare_tracks`, `resample_interleaved` (tempo, keys, tags, EQ and the UI now have tests). <!-- id:r7 cu:123kjkdmpxp -->
+- [ ] A human runs the Windows 1.1.0 zip: launch, play, media keys, themes. Until then the download page calls Windows "beta". <!-- id:p12 -->
+- [ ] Decide the licence: aubio (the GPL reason) is gone, so MIT/Apache is possible. Hiren's call; GPL stays until then. <!-- id:p13 -->
 - [x] GPL-3.0-or-later LICENSE, About window, `THIRD_PARTY_LICENSES.html` via cargo-about, shipped in the bundle and Windows zip. <!-- id:p1 cu:123kjkdmpxq -->
 - [x] Auto tag-writing is opt-in (off by default); settings persist via eframe storage. <!-- id:p2 cu:123kjkdmpxr -->
 - [x] Transport button and Bar readout clipping fixed; volume fader + mute next to transport. <!-- id:p3 cu:123kjkdmpxt -->
-- [ ] Hiren checks the new transport row, volume fader and About window by eye. <!-- id:p4 cu:123kjkdmpxu -->
+- [x] Hiren checks the new transport row, volume fader and About window by eye. <!-- id:p4 cu:123kjkdmpxu -->
 - [ ] CHANGELOG.md (keepachangelog) + bump to 1.1.0 for the first public release. <!-- id:p5 cu:123kjkdmpxv -->
   CHANGELOG.md, `scripts/release.sh`, CI checks and tag verification are in; what's left is merging to `master` and running `./scripts/release.sh 1.1.0`.
 - [ ] "New version available" check: fetch `latest.json` from Hiren's site on launch, dismissable banner, off-switch, privacy note updated. <!-- id:p6 cu:123kjkdmpxw -->
@@ -183,7 +195,7 @@ Release is next week. Order is risk reduced per hour; full detail per item in `d
 - [x] Package-currency pass: `cargo update` (patch/minor), egui/eframe 0.36, Rust 1.99, clippy auto-fixes. <!-- id:f4 cu:123kjkdmpy5 -->
 - [ ] symphonia 0.5 to 0.6: breaking decode API; do it after release, behind the decode tests. <!-- id:f5 cu:123kjkdmpy6 -->
 - [ ] souvlaki 0.8.3 pulls `block 0.1.6` (old `cocoa`), which a future Rust will reject. Watch for a souvlaki release or patch it. <!-- id:f6 cu:123kjkdmpy7 -->
-- [ ] Beat-synced Bar counter / metronome: today's counter assumes beat 1 at 0:00, so it drifts from the music on most tracks. Needs a beat grid (first-downbeat offset from aubio onsets), then the counter and a click track can follow it. <!-- id:f7 cu:123kjkdmpy8 -->
+- [ ] Bar counter / metronome on the beat grid: period and phase exist now (`bpm.rs`), the tempo light and loops use them; what's missing is the downbeat (which beat is 1), e.g. the phase among the four whose beats carry the most Low-band energy, plus a "set beat 1 here" nudge. Then a 1-2-3-4 readout and a click track. <!-- id:f7 cu:123kjkdmpy8 -->
   Plan: (1) keep aubio's per-beat times during analysis, not just the BPM; (2) refine BPM with a line fit through them, grid phase = circular mean of beat-time mod period; (3) guess the downbeat as the phase whose beats carry the most Low-band energy (kick on the 1); (4) a "set beat 1 here" nudge for when the guess is wrong, like Rekordbox's grid adjust; (5) counter and loop buttons snap to the grid; (6) metronome = a click mixed in the audio callback at grid times. About two sessions.
 - [x] Rekordbox bridge via rekordbox XML, the import format Pioneer documents and Rekordbox 6/7 read. Qinip keeps its own playlists and writes them to one XML file; right-click → "Add to Rekordbox playlist ▸ <name> / New…". One-time Rekordbox setup (Preferences > Advanced > Database > rekordbox xml; show "rekordbox xml" in the tree), then refresh + Import in Rekordbox. Not writing Rekordbox's own `master.db` (encrypted, undocumented, can corrupt the library). Check against Hiren's Rekordbox version first. <!-- id:f9 cu:123kjkdpum2 -->
 - [ ] Velopack auto-update (replaces the p6 banner with in-app updates). <!-- id:f8 cu:123kjkdmpy9 -->
@@ -193,6 +205,16 @@ Release is next week. Order is risk reduced per hour; full detail per item in `d
 ## Diary
 
 <!-- Newest first. One entry per working session. Terse, factual, honest. Append only. -->
+
+### 2026-11-05 — launch prep: audit, tempogram, themes, UI tests
+- Merged `master` (Hiren's Clear Playlist + move dialog, ported by hand onto the branch; a moved track now leaves the playlist). Untracked the copyrighted test MP3 (`test_audio_files/*.mp3` gitignored; still in git history, see hand-off).
+- Adversarial audit (agent) found: Windows launch crash (souvlaki `hwnd: None`), low-sample-rate crash in `eq.rs`, shortcuts firing inside the playlist-name field, tag write wiping unparsable tags, unbounded `audio_cache`, README leftover table, stale autoplay hijack, shuffle not resetting, load-while-sorted, Clear leaving a ghost track, short tracks never "played". All fixed; `window_hwnd()` passes the Win32 handle, `#![windows_subsystem]` set, `cargo check --target x86_64-pc-windows-msvc` passes.
+- BPM: aubio's beat tracker read 1.5–2.4 % high on all six tagged tracks even with a median of its beats; replaced with an autocorrelation tempogram (`bpm.rs`, no aubio, no C deps): 120.06/120.06/127.91/123.02/118.09/120.04 vs tags 120/120/128/123/118/120. Beat phase feeds the tempo light (replaces the drifting 1-2-3-4 counter) and loop snapping.
+- Tags: `read_analysis_tags` (TBPM any format; TKEY as Am/A#m/Bbm/A Minor/8A) fills BPM/key at load → tagged libraries skip analysis; `TKEY` now written short (`Am`), file's ID3 version kept. Right-click Re-analyze. Tooltips show the source.
+- Themes Red + Forest Green; `strong()` text was invisible in dark themes (egui's active text colour was the on-accent colour), fixed; grid overflowed by the 8 resize handles, fixed.
+- `src/ui_tests.rs`: egui_kittest drives the real app headless (silent engine): empty state, load a folder, wait for analysis, play, every theme, About, Clear. With `QINIP_UI_RENDER_DIR` it writes PNGs, which is how the themes were checked by eye this session.
+- Deps: `cargo update` (73 crates), aubio-rs and ringbuf removed, raw-window-handle added (Windows); licences regenerated. egui 0.37 and symphonia 0.6 held back.
+- Release flow: `release.sh` clippy now blocking and `--all-targets`; `--locked` builds; Windows CI no longer installs LLVM. README/CHANGELOG/About updated.
 
 ### 2026-10-15 (later) — rekordbox bridge, strict release flow
 - `src/rekordbox.rs`: crates (Qinip playlists) persisted in settings and exported as rekordbox XML (COLLECTION + ROOT > "Qinip" folder > playlists, KeyType 0). Writes to rekordbox's own `bridgeImportedLibraryFile` (read from `~/Library/Application Support/Pioneer/rekordbox6/rekordbox3.settings`, confirmed on Hiren's rekordbox 7.1.3) when that file is missing or Qinip's, else `~/Music/Qinip/qinip-rekordbox.xml`; never another tool's file, never rekordbox settings or master.db. Atomic write. 6 tests.

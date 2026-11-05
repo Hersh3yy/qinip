@@ -9,7 +9,7 @@ use eframe::egui;
 use crate::bpm::detect_bpm;
 use crate::decode::DecodedAudio;
 use crate::dev;
-use crate::eq::{band_waveform_peaks, BandWaveform, EqGains, BAND_COLORS, BAND_LABELS};
+use crate::eq::{BandWaveform, EqGains, BAND_COLORS, BAND_LABELS};
 use crate::file_ops;
 use crate::key::detect_key;
 use crate::knob::eq_knob;
@@ -20,16 +20,23 @@ use crate::playlist::{AnalysisState, Playlist, SortColumn, SortDirection};
 use crate::rekordbox::{self, CrateTrack, Crates, ExportTarget, Setup as RekordboxSetup};
 use crate::tags;
 use crate::theme::{Palette, ThemeChoice};
-use crate::transport::{beat_bar_indicator, transport_button};
+use crate::transport::{tempo_indicator, transport_button};
 use crate::worker::{AnalysisWorker, WorkerJob, WorkerUpdate};
 use souvlaki::MediaControlEvent;
+
+/// What one analysis run found.
+struct AnalysisValues {
+    bpm: f32,
+    beat_offset_secs: f32,
+    key: String,
+}
 
 struct AnalysisResult {
     path: PathBuf,
     /// `Ok((bpm, key_name))` on success, `Err(message)` if detection failed
     /// or panicked — either way the UI shows it, it never just hangs on
     /// "Analyzing…" forever.
-    outcome: Result<(f32, String), String>,
+    outcome: Result<AnalysisValues, String>,
 }
 
 /// Resizable playlist column widths (Title column takes remaining space).
@@ -65,8 +72,10 @@ impl PlaylistColumns {
         self.track_num + self.artist + self.duration + self.bpm + self.key + self.camelot + self.played
     }
 
+    /// Width left for the title column: everything else, the gaps, and the
+    /// eight 6 px resize handles the headers draw.
     fn title_width(&self, avail: f32, spacing: f32) -> f32 {
-        (avail - self.fixed_width() - spacing * 7.0).max(self.title)
+        (avail - self.fixed_width() - spacing * 7.0 - 8.0 * 6.0).max(self.title)
     }
 }
 
@@ -144,6 +153,9 @@ impl Default for Settings {
 }
 
 const SETTINGS_KEY: &str = "qinip-settings";
+/// Crates live under their own key: a settings file that fails to parse
+/// (say after a theme rename) must not take the rekordbox playlists with it.
+const CRATES_KEY: &str = "qinip-crates";
 
 pub struct QinipApp {
     playlist: Playlist,
@@ -173,6 +185,8 @@ pub struct QinipApp {
     applied_palette: Option<Palette>,
     repeat: RepeatMode,
     shuffle: bool,
+    /// The track the user asked to play that is still decoding.
+    pending_play: Option<PathBuf>,
     /// The track Next/autoplay will go to, chosen once so the gapless preload
     /// and the actual advance agree (matters for shuffle). Stored by path so
     /// it survives sorting; cleared whenever the queue context changes.
@@ -209,29 +223,43 @@ pub struct QinipApp {
 
 impl QinipApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        Self::build(cc, false)
+    }
+
+    /// For UI tests: silent audio engine, no OS media controls, no Dock icon.
+    #[cfg(test)]
+    pub(crate) fn new_headless(cc: &eframe::CreationContext<'_>) -> Self {
+        Self::build(cc, true)
+    }
+
+    fn build(cc: &eframe::CreationContext<'_>, headless: bool) -> Self {
         if dev::enabled() {
             eprintln!("[dev] QINIP_DEV enabled — logging to stderr");
             eprintln!("[dev] tip: use `cargo run --release` for ~18x faster analysis");
         }
 
 
-        crate::macos_icon::set_dock_icon();
+        if !headless {
+            crate::macos_icon::set_dock_icon();
+        }
 
         // Never crash at launch over audio: a Mac with no output device (or a
         // Bluetooth device mid-switch) gets a silent engine and a Retry banner.
-        let (playback, audio_error) = match PlaybackEngine::new() {
-            Ok(engine) => (engine, None),
-            Err(err) => {
-                dev::log(format!("audio output failed: {err}"));
-                (PlaybackEngine::silent(), Some(err.to_string()))
+        let (playback, audio_error) = if headless {
+            (PlaybackEngine::silent(), None)
+        } else {
+            match PlaybackEngine::new() {
+                Ok(engine) => (engine, None),
+                Err(err) => {
+                    dev::log(format!("audio output failed: {err}"));
+                    (PlaybackEngine::silent(), Some(err.to_string()))
+                }
             }
         };
-        let system_media = match SystemMedia::new(cc.egui_ctx.clone()) {
-            Ok(media) => Some(media),
-            Err(err) => {
-                dev::log(format!("system media controls unavailable: {err}"));
-                None
-            }
+        let system_media = if headless {
+            None
+        } else {
+            init_system_media(cc)
         };
         let settings: Settings = cc
             .storage
@@ -241,6 +269,11 @@ impl QinipApp {
         let _ = playback.set_volume(volume);
 
         let rb_setup = RekordboxSetup::detect();
+        let crates: Crates = cc
+            .storage
+            .and_then(|storage| eframe::get_value(storage, CRATES_KEY))
+            // Older builds kept them inside Settings.
+            .unwrap_or_else(|| settings.crates.clone());
 
         let (worker, updates_rx) = AnalysisWorker::spawn();
         let (analysis_tx, analysis_rx) = mpsc::channel();
@@ -269,11 +302,12 @@ impl QinipApp {
             applied_palette: None,
             repeat: settings.repeat,
             shuffle: settings.shuffle,
+            pending_play: None,
             upcoming: None,
             history: Vec::new(),
             rb_target: rekordbox::export_target(&rb_setup),
             rb_setup,
-            crates: settings.crates,
+            crates,
             show_rekordbox: false,
             rb_new: None,
             was_playing: false,
@@ -297,7 +331,8 @@ impl QinipApp {
                 WorkerUpdate::TrackReady {
                     path,
                     audio,
-                    autoplay,
+                    peaks,
+                    autoplay: _,
                 } => {
                     let Some(track_index) = self.playlist.index_of(&path) else {
                         continue;
@@ -309,22 +344,32 @@ impl QinipApp {
                         audio.duration_secs()
                     ));
 
-                    let peak_start = std::time::Instant::now();
-                    let mono = audio.downmix_to_mono();
-                    let peaks = band_waveform_peaks(&mono, audio.sample_rate, 800);
                     self.waveform_cache.insert(path.clone(), peaks);
-                    dev::log_timing("band waveform peaks", peak_start);
 
+                    // Tracks whose BPM and key came from their tags are already
+                    // Done; this decode was for the waveform and playback only.
+                    let needs_analysis = self
+                        .playlist
+                        .tracks
+                        .get(track_index)
+                        .is_some_and(|t| t.analysis != AnalysisState::Done);
                     if let Some(track) = self.playlist.tracks.get_mut(track_index) {
-                        track.analysis = AnalysisState::Analyzing;
                         track.duration_secs = Some(audio.duration_secs());
+                        if needs_analysis {
+                            track.analysis = AnalysisState::Analyzing;
+                        }
                     }
 
                     let audio = Arc::new(audio);
                     self.audio_cache.insert(path.clone(), Arc::clone(&audio));
-                    self.spawn_analysis(path.clone(), audio);
+                    if needs_analysis {
+                        self.spawn_analysis(path.clone(), audio);
+                    }
 
-                    if autoplay {
+                    // Only the track the user asked for last starts playing; an
+                    // earlier, slower request landing now must not hijack playback.
+                    if self.pending_play.as_ref() == Some(&path) {
+                        self.pending_play = None;
                         self.play_track(track_index, true);
                     }
                 }
@@ -356,25 +401,66 @@ impl QinipApp {
         };
 
         match result.outcome {
-            Ok((bpm, key)) => {
+            Ok(values) => {
                 dev::log(format!(
-                    "analysis done {} — {:.1} BPM, {key}",
+                    "analysis done {} — {:.1} BPM, {}",
                     result.path.display(),
-                    bpm
+                    values.bpm,
+                    values.key
                 ));
-                track.set_analysis_result(bpm, key);
+                track.set_analysis_result(values.bpm, values.beat_offset_secs, values.key);
             }
             Err(message) => {
                 dev::log(format!("analysis failed {}: {message}", result.path.display()));
                 track.analysis = AnalysisState::Failed(message);
             }
         }
+        self.prune_audio_cache();
+    }
+
+    /// Keep decoded audio only for what is playing, what plays next and what
+    /// the user asked to play. A decoded track is ~100 MB; keeping a whole
+    /// folder would be gigabytes. Anything else is decoded again on demand.
+    fn prune_audio_cache(&mut self) {
+        let mut keep: Vec<PathBuf> = self
+            .playing_track
+            .and_then(|i| self.playlist.tracks.get(i))
+            .map(|t| t.path.clone())
+            .into_iter()
+            .collect();
+        keep.extend(self.upcoming.iter().cloned());
+        keep.extend(self.pending_play.iter().cloned());
+        keep.extend(
+            self.playlist
+                .tracks
+                .iter()
+                .filter(|t| matches!(t.analysis, AnalysisState::Loading | AnalysisState::Analyzing))
+                .map(|t| t.path.clone()),
+        );
+        self.audio_cache.retain(|path, _| keep.contains(path));
+    }
+
+    /// Decode the track that will play next now, so the gapless swap finds
+    /// it ready, then drop decoded audio nothing will use soon.
+    fn warm_upcoming(&mut self) {
+        if let Some(current) = self.playing_track
+            && let Some(next) = self.upcoming_index(current)
+            && let Some(track) = self.playlist.tracks.get(next)
+            && !self.audio_cache.contains_key(&track.path)
+            && matches!(track.analysis, AnalysisState::Done | AnalysisState::Failed(_))
+        {
+            self.worker.enqueue(WorkerJob::LoadTrack {
+                path: track.path.clone(),
+                autoplay: false,
+            });
+        }
+        self.prune_audio_cache();
     }
 
     /// Runs BPM + key detection on a background thread and reports the
     /// result back over `analysis_tx`. Wrapped in `catch_unwind` — a bad file
-    /// tripping a panic inside `detect_bpm`/`detect_key` (see e.g. aubio's
-    /// `.expect()` calls) must only fail that one track, not take down the
+    /// tripping a panic inside `detect_bpm`/`detect_key` (an FFT size or an
+    /// index on odd audio) must only fail that one track, not take down the
     /// thread silently or, worse, the whole app.
     fn spawn_analysis(&self, path: PathBuf, audio: Arc<DecodedAudio>) {
         let tx = self.analysis_tx.clone();
@@ -384,8 +470,8 @@ impl QinipApp {
             let start = std::time::Instant::now();
             let outcome = run_bpm_key_analysis(&audio);
             dev::log_timing(&format!("bpm+key {}", path.display()), start);
-            if write_tags && let Ok((bpm, ref key)) = outcome {
-                match tags::write_analysis_tags(&path, bpm, key) {
+            if write_tags && let Ok(ref values) = outcome {
+                match tags::write_analysis_tags(&path, values.bpm, &values.key) {
                     Ok(true) => {
                         dev::log(format!("wrote missing BPM/Key tags: {}", path.display()));
                     }
@@ -404,13 +490,15 @@ impl QinipApp {
         });
     }
 
-    fn load_folder(&mut self, folder: PathBuf) {
+    pub(crate) fn load_folder(&mut self, folder: PathBuf) {
         self.forget_upcoming();
         let added = self.playlist.append_folder(&folder);
-        self.status_message = format!(
-            "Added {added} tracks from {} — analyzing…",
-            folder.display()
-        );
+        self.apply_playlist_sort();
+        self.status_message = if added == 0 {
+            format!("No MP3s found in {}", folder.display())
+        } else {
+            format!("Added {added} track{} from {}", if added == 1 { "" } else { "s" }, folder.display())
+        };
         dev::log(format!("folder appended ({added}): {}", folder.display()));
         self.analyze_pending();
     }
@@ -418,7 +506,12 @@ impl QinipApp {
     fn load_paths(&mut self, paths: Vec<PathBuf>) {
         self.forget_upcoming();
         let added = self.playlist.append_paths(paths);
-        self.status_message = format!("Added {added} tracks — analyzing…");
+        self.apply_playlist_sort();
+        self.status_message = if added == 0 {
+            "Nothing added: only MP3 files can be loaded.".to_string()
+        } else {
+            format!("Added {added} track{}", if added == 1 { "" } else { "s" })
+        };
         self.analyze_pending();
     }
 
@@ -453,11 +546,20 @@ impl QinipApp {
             }
         }
 
+        let count = jobs.len();
+        if count == 0 {
+            // Everything already carries BPM and key in its tags.
+            return;
+        }
         for (_, job) in jobs {
             self.worker.enqueue(job);
         }
 
-        self.status_message = "Analyzing tracks in background…".to_string();
+        self.status_message = format!(
+            "{} Analyzing {count} track{} in the background…",
+            self.status_message,
+            if count == 1 { "" } else { "s" }
+        );
         dev::log("queued analyze-pending");
     }
 
@@ -513,9 +615,12 @@ impl QinipApp {
         }
 
         if let Some(track) = self.playlist.tracks.get_mut(index) {
-            track.analysis = AnalysisState::Loading;
+            if track.analysis != AnalysisState::Done && track.analysis != AnalysisState::Analyzing {
+                track.analysis = AnalysisState::Loading;
+            }
             let path = track.path.clone();
             let label = track.display_label();
+            self.pending_play = Some(path.clone());
             self.worker.enqueue(WorkerJob::LoadTrack {
                 path,
                 autoplay: true,
@@ -547,6 +652,7 @@ impl QinipApp {
 
         self.playing_track = Some(index);
         self.selection.select_only(index);
+        self.pending_play = None;
         self.last_listen_at = None;
         self.autoplay_preloaded = false;
         self.upcoming = None;
@@ -562,6 +668,7 @@ impl QinipApp {
         self.status_message = format!("Playing {}", self.playlist.tracks[index].display_label());
         dev::log(format!("playing track #{index}"));
         self.sync_system_media();
+        self.warm_upcoming();
     }
 
     /// Next button / media key: always moves on, even in Repeat one.
@@ -626,10 +733,16 @@ impl QinipApp {
 
     /// Pick the track after `current` under the repeat/shuffle rules.
     /// `manual` treats Repeat one like Repeat all (the user pressed Next).
-    fn choose_next(&self, current: usize, manual: bool) -> Option<usize> {
+    fn choose_next(&mut self, current: usize, manual: bool) -> Option<usize> {
         let tracks = &self.playlist.tracks;
         let played = |i: usize| self.history.contains(&tracks[i].path);
         let pool = next_candidates(current, tracks.len(), self.repeat, self.shuffle, manual, played);
+        // Everyone had a turn: start a fresh cycle so "each track once" holds again.
+        if self.shuffle && !pool.is_empty() && pool.iter().all(|&i| played(i)) {
+            let current_path = tracks.get(current).map(|t| t.path.clone());
+            self.history.clear();
+            self.history.extend(current_path);
+        }
         match pool.len() {
             0 => None,
             1 => Some(pool[0]),
@@ -771,7 +884,8 @@ impl QinipApp {
                 });
             if create && !name.trim().is_empty() {
                 self.add_to_crate(&name, &paths);
-            } else if keep_open && !create {
+            } else if keep_open {
+                // Enter on an empty name: stay open and wait for a name.
                 self.rb_new = Some((name, paths));
             }
         }
@@ -964,6 +1078,9 @@ impl QinipApp {
 
     fn apply_playlist_sort(&mut self) {
         self.forget_upcoming();
+        // These hold row indices; a reorder would point them at the wrong track.
+        self.confirm_delete = None;
+        self.move_dialog = None;
         let playing_path = self
             .playing_track
             .and_then(|i| self.playlist.tracks.get(i).map(|t| t.path.clone()));
@@ -1068,7 +1185,7 @@ impl QinipApp {
             return;
         }
         let count = self.playlist.tracks.len();
-        let _ = self.playback.pause();
+        let _ = self.playback.unload();
         self.forget_upcoming();
         self.clear_loop();
         self.playlist = Playlist::new();
@@ -1082,6 +1199,7 @@ impl QinipApp {
         self.confirm_delete = None;
         self.move_dialog = None;
         self.rb_new = None;
+        self.pending_play = None;
         self.autoplay_preloaded = false;
         self.seek_slider = 0.0;
         self.status_message = format!("Cleared playlist ({count} tracks)");
@@ -1245,6 +1363,33 @@ impl QinipApp {
         }
     }
 
+    /// Drop the tagged BPM/key (and any earlier result) and analyze again.
+    fn reanalyze_track(&mut self, index: usize) {
+        let Some(track) = self.playlist.tracks.get_mut(index) else {
+            return;
+        };
+        track.mark_for_reanalysis();
+        let path = track.path.clone();
+        let label = track.display_label();
+
+        if let Some(audio) = self.audio_cache.get(&path).map(Arc::clone) {
+            if let Some(track) = self.playlist.tracks.get_mut(index) {
+                track.analysis = AnalysisState::Analyzing;
+            }
+            self.spawn_analysis(path, audio);
+        } else {
+            if let Some(track) = self.playlist.tracks.get_mut(index) {
+                track.analysis = AnalysisState::Loading;
+            }
+            self.worker.enqueue(WorkerJob::LoadTrack {
+                path,
+                autoplay: false,
+            });
+        }
+        self.status_message = format!("Re-analyzing {label}…");
+        dev::log(format!("re-analyze #{index}"));
+    }
+
     fn write_tags_for(&mut self, index: usize) {
         let Some(track) = self.playlist.tracks.get(index) else {
             return;
@@ -1292,6 +1437,16 @@ impl QinipApp {
         let _ = self.playback.clear_loop();
     }
 
+    /// Seconds from 0:00 to the first beat of the current track (0 if unknown).
+    fn current_beat_offset(&self) -> f64 {
+        let index = self.playing_track.or(self.selected());
+        index
+            .and_then(|i| self.playlist.tracks.get(i))
+            .and_then(|t| t.beat_offset_secs)
+            .map(f64::from)
+            .unwrap_or(0.0)
+    }
+
     fn current_bpm(&self) -> Option<f32> {
         let index = self.playing_track.or(self.selected())?;
         self.playlist.tracks.get(index)?.bpm
@@ -1311,7 +1466,9 @@ impl QinipApp {
 
         let position = self.playback.status().position_secs();
         let beat_secs = 60.0 / bpm as f64;
-        let start = (position / beat_secs).floor() * beat_secs;
+        // Snap to the beat grid Qinip heard, not to 0:00.
+        let offset = self.current_beat_offset();
+        let start = (((position - offset) / beat_secs).floor() * beat_secs + offset).max(0.0);
         let end = start + beat_secs * beats as f64;
 
         let duration = self.playback.status().duration_secs();
@@ -1403,6 +1560,11 @@ impl QinipApp {
     }
 
     fn handle_keyboard(&mut self, ctx: &egui::Context) {
+        // Typing in a dialog (e.g. a playlist name) must not delete tracks or
+        // select-all the playlist.
+        if ctx.text_edit_focused() {
+            return;
+        }
         let enter = ctx.input(|i| i.key_pressed(egui::Key::Enter));
         // macOS delete-key often arrives as Backspace; Delete covers Windows/Linux.
         let remove = ctx.input(|i| {
@@ -1429,9 +1591,11 @@ impl QinipApp {
         }
     }
 
-    fn accumulate_listen_time(&mut self, now: f64) {
-        let playing = self.playback.status().is_playing();
-        if !playing {
+    /// Count listened seconds from how far the playhead moved, so a throttled
+    /// or hidden window still accrues; a seek (big jump either way) does not.
+    fn accumulate_listen_time(&mut self) {
+        let status = self.playback.status();
+        if !status.is_playing() {
             self.last_listen_at = None;
             return;
         }
@@ -1441,18 +1605,21 @@ impl QinipApp {
             return;
         };
 
+        let position = status.position_secs();
         if let Some(last) = self.last_listen_at {
-            let dt = now - last;
-            if dt > 0.0 && dt < 1.0
-                && let Some(track) = self.playlist.tracks.get_mut(index) {
-                    track.mark_listened(dt);
-                    if track.qualifies_as_played() {
-                        self.was_playing = true;
-                    }
+            let dt = position - last;
+            if dt > 0.0
+                && dt < 5.0
+                && let Some(track) = self.playlist.tracks.get_mut(index)
+            {
+                track.mark_listened(dt);
+                if track.qualifies_as_played() {
+                    self.was_playing = true;
                 }
+            }
         }
 
-        self.last_listen_at = Some(now);
+        self.last_listen_at = Some(position);
     }
 
     fn maybe_autoplay_next(&mut self) -> bool {
@@ -1535,6 +1702,7 @@ impl QinipApp {
         );
         dev::log(format!("gapless autoplay → #{next}"));
         self.sync_system_media();
+        self.warm_upcoming();
     }
 
     fn seek_from_waveform_click(&mut self, fraction: f64) {
@@ -1688,7 +1856,12 @@ impl QinipApp {
                 ui.separator();
 
                 let position = self.playback.status().position_secs();
-                beat_bar_indicator(ui, position, self.current_bpm(), &self.palette);
+                tempo_indicator(
+                    ui,
+                    position - self.current_beat_offset(),
+                    self.current_bpm(),
+                    &self.palette,
+                );
 
                 ui.separator();
                 self.draw_volume(ui);
@@ -1932,9 +2105,10 @@ impl eframe::App for QinipApp {
                 theme: self.theme,
                 repeat: self.repeat,
                 shuffle: self.shuffle,
-                crates: self.crates.clone(),
+                crates: Crates::default(),
             },
         );
+        eframe::set_value(storage, CRATES_KEY, &self.crates);
     }
 
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -1945,8 +2119,7 @@ impl eframe::App for QinipApp {
         self.handle_drops(ctx);
         self.handle_keyboard(ctx);
 
-        let now = ctx.input(|i| i.time);
-        self.accumulate_listen_time(now);
+        self.accumulate_listen_time();
         if self.maybe_autoplay_next() {
             // Apply Load/Play (or detect gapless swap) in the same frame — avoids a
             // visible pause between autoplay commands and the audio thread.
@@ -2043,10 +2216,10 @@ impl eframe::App for QinipApp {
                     ui.hyperlink(env!("CARGO_PKG_REPOSITORY"));
                     ui.add_space(6.0);
                     ui.label(
-                        "BPM and key detection by aubio (GPL-3.0, aubio.org). Built with \
-                         egui, cpal, symphonia, souvlaki and other open-source crates. \
-                         Their licenses are in THIRD_PARTY_LICENSES.html, inside the \
-                         app's Resources folder and in the source repository.",
+                        "Tempo and key detection are Qinip's own. Built with egui, cpal, \
+                         symphonia, souvlaki and other open-source crates; their licenses \
+                         are in THIRD_PARTY_LICENSES.html next to the app (inside the .app \
+                         on macOS) and in the source repository.",
                     );
                     ui.add_space(6.0);
                     ui.label(egui::RichText::new("Qinip makes no network connections.").weak());
@@ -2171,6 +2344,7 @@ impl eframe::App for QinipApp {
             let mut pending_delete = None;
             let mut pending_move = None;
             let mut pending_tags = None;
+            let mut pending_reanalyze = None;
             let mut pending_open_folder = None;
             // (row, Some(playlist) | None = new playlist)
             let mut pending_rb: Option<(usize, Option<String>)> = None;
@@ -2373,6 +2547,16 @@ impl eframe::App for QinipApp {
                                         pending_tags = Some(index);
                                         ui.close();
                                     }
+                                    if ui
+                                        .button("Re-analyze BPM/Key")
+                                        .on_hover_text(
+                                            "Ignore the BPM/key stored in the file and let Qinip listen again.",
+                                        )
+                                        .clicked()
+                                    {
+                                        pending_reanalyze = Some(index);
+                                        ui.close();
+                                    }
                                     ui.separator();
                                     if ui
                                         .button(
@@ -2387,6 +2571,7 @@ impl eframe::App for QinipApp {
                                 });
 
                                 let track = &self.playlist.tracks[index];
+                                let source_label = track.analysis_source_label();
                                 playlist_cell_label(ui, track.duration_label(), cols.duration);
 
                                 let value_color = match &track.analysis {
@@ -2398,24 +2583,12 @@ impl eframe::App for QinipApp {
                                     AnalysisState::Pending => self.palette.value_pending,
                                 };
 
-                                playlist_cell_rich(
-                                    ui,
-                                    track.bpm_label(),
-                                    cols.bpm,
-                                    value_color,
-                                );
-                                playlist_cell_rich(
-                                    ui,
-                                    track.key_label(),
-                                    cols.key,
-                                    value_color,
-                                );
-                                playlist_cell_rich(
-                                    ui,
-                                    track.camelot_label(),
-                                    cols.camelot,
-                                    value_color,
-                                );
+                                playlist_cell_rich(ui, track.bpm_label(), cols.bpm, value_color)
+                                    .on_hover_text(source_label);
+                                playlist_cell_rich(ui, track.key_label(), cols.key, value_color)
+                                    .on_hover_text(source_label);
+                                playlist_cell_rich(ui, track.camelot_label(), cols.camelot, value_color)
+                                    .on_hover_text(source_label);
                                 playlist_cell_label(
                                     ui,
                                     if track.played { "✓" } else { "—" },
@@ -2448,6 +2621,9 @@ impl eframe::App for QinipApp {
             }
             if let Some(index) = pending_tags {
                 self.write_tags_for(index);
+            }
+            if let Some(index) = pending_reanalyze {
+                self.reanalyze_track(index);
             }
             if let Some((index, choice)) = pending_rb {
                 let paths: Vec<PathBuf> = self
@@ -2573,14 +2749,19 @@ fn playlist_cell_label(ui: &mut egui::Ui, text: impl AsRef<str>, width: f32) {
     let _ = width;
 }
 
-fn playlist_cell_rich(ui: &mut egui::Ui, text: String, width: f32, color: egui::Color32) {
-    let resp = ui.add(
+fn playlist_cell_rich(
+    ui: &mut egui::Ui,
+    text: String,
+    width: f32,
+    color: egui::Color32,
+) -> egui::Response {
+    let _ = width;
+    ui.add(
         egui::Label::new(egui::RichText::new(text).color(color))
             .selectable(false)
             .sense(egui::Sense::click()),
-    );
-    resp.on_hover_cursor(egui::CursorIcon::PointingHand);
-    let _ = width;
+    )
+    .on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
 /// Load the app window icon from the bundled PNG/JPEG asset.
@@ -2640,6 +2821,38 @@ fn next_candidates(
     }
 }
 
+/// OS media keys / Now Playing. On Windows souvlaki needs the Win32 window
+/// handle and panics without one, so no handle means no media keys there.
+fn init_system_media(cc: &eframe::CreationContext<'_>) -> Option<SystemMedia> {
+    let hwnd = window_hwnd(cc);
+    if cfg!(windows) && hwnd.is_none() {
+        dev::log("no window handle; media keys disabled");
+        return None;
+    }
+    match SystemMedia::new(cc.egui_ctx.clone(), hwnd) {
+        Ok(media) => Some(media),
+        Err(err) => {
+            dev::log(format!("system media controls unavailable: {err}"));
+            None
+        }
+    }
+}
+
+#[cfg(windows)]
+fn window_hwnd(cc: &eframe::CreationContext<'_>) -> Option<*mut std::ffi::c_void> {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    let handle = cc.window_handle().ok()?;
+    match handle.as_raw() {
+        RawWindowHandle::Win32(win) => Some(win.hwnd.get() as *mut std::ffi::c_void),
+        _ => None,
+    }
+}
+
+#[cfg(not(windows))]
+fn window_hwnd(_cc: &eframe::CreationContext<'_>) -> Option<*mut std::ffi::c_void> {
+    None
+}
+
 /// The OS light/dark preference, if the platform reports one.
 fn system_dark(ctx: &egui::Context) -> Option<bool> {
     ctx.system_theme().map(|theme| theme == egui::Theme::Dark)
@@ -2649,11 +2862,15 @@ fn system_dark(ctx: &egui::Context) -> Option<bool> {
 /// malformed/unusual track can never kill the analysis thread out from
 /// under the app (mirrors the `catch_unwind` guard already used for decode
 /// in `worker.rs`).
-fn run_bpm_key_analysis(audio: &DecodedAudio) -> Result<(f32, String), String> {
+fn run_bpm_key_analysis(audio: &DecodedAudio) -> Result<AnalysisValues, String> {
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
         let bpm_result = detect_bpm(audio);
         let key_result = detect_key(audio);
-        (bpm_result.bpm, key_result.key_name)
+        AnalysisValues {
+            bpm: bpm_result.bpm,
+            beat_offset_secs: bpm_result.beat_offset_secs,
+            key: key_result.key_name,
+        }
     }));
 
     result.map_err(|_| "BPM/key analysis panicked".to_string())
@@ -2664,6 +2881,40 @@ fn format_clock(secs: f64) -> String {
     let minutes = total / 60;
     let seconds = total % 60;
     format!("{minutes}:{seconds:02}")
+}
+
+#[cfg(test)]
+impl QinipApp {
+    pub(crate) fn track_count(&self) -> usize {
+        self.playlist.tracks.len()
+    }
+
+    pub(crate) fn status(&self) -> &str {
+        &self.status_message
+    }
+
+    pub(crate) fn all_analyzed(&self) -> bool {
+        self.playlist
+            .tracks
+            .iter()
+            .all(|t| matches!(t.analysis, AnalysisState::Done | AnalysisState::Failed(_)))
+    }
+
+    pub(crate) fn track_summary(&self) -> Vec<(String, Option<f32>, Option<String>, bool)> {
+        self.playlist
+            .tracks
+            .iter()
+            .map(|t| (t.title.clone(), t.bpm, t.camelot.clone(), t.tagged_bpm && t.tagged_key))
+            .collect()
+    }
+
+    pub(crate) fn request_play_index(&mut self, index: usize) {
+        self.request_play(index);
+    }
+
+    pub(crate) fn set_theme_for_test(&mut self, theme: ThemeChoice) {
+        self.theme = theme;
+    }
 }
 
 #[cfg(test)]

@@ -55,7 +55,8 @@ ok "changelog has $(echo "$UNRELEASED" | grep -c '^- ') entries"
 # 4. Quality gate
 cargo test --quiet >/dev/null 2>&1 || fail "cargo test failed (run it to see why)"
 ok "tests pass"
-cargo clippy --quiet -- -D warnings >/dev/null 2>&1 || echo "! clippy has warnings (not blocking; run cargo clippy)"
+cargo clippy --all-targets --quiet -- -D warnings >/dev/null 2>&1 || fail "clippy has warnings (CI is strict; run cargo clippy --all-targets)"
+ok "clippy clean"
 
 if $DRY_RUN; then
   echo ""

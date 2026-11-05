@@ -106,15 +106,10 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install LLVM (aubio bindgen)
-        run: choco install llvm -y
-
       - name: Build release
         shell: bash
-        env:
-          LIBCLANG_PATH: C:\Program Files\LLVM\bin
         run: |
-          cargo build --release --bin qinip
+          cargo build --release --locked --bin qinip
           mkdir -p dist
           cp target/release/qinip.exe "dist/Qinip.exe"
           cp README.md dist/

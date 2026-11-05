@@ -50,7 +50,7 @@ fi
 
 echo "==> Compiling release binary (v$VERSION, build $BUILD_NUMBER)..."
 # Match the binary's minimum macOS to LSMinimumSystemVersion below.
-MACOSX_DEPLOYMENT_TARGET=11.0 cargo build --release --bin qinip
+MACOSX_DEPLOYMENT_TARGET=11.0 cargo build --release --locked --bin qinip
 
 echo "==> Assembling .app bundle..."
 rm -rf "$APP_DIR"
@@ -115,7 +115,7 @@ cat > "$APP_DIR/Contents/Info.plist" <<PLIST
 </plist>
 PLIST
 
-# One Mach-O, aubio compiled in, no dylibs or frameworks: sign the bundle
+# One Mach-O, no C libraries, no dylibs or frameworks: sign the bundle
 # once, no --deep (Apple deprecates it for anything but flat bundles).
 if [ -n "$SIGN_IDENTITY" ]; then
   echo "==> Signing with Developer ID + hardened runtime..."

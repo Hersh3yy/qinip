@@ -29,7 +29,6 @@ STAGE="$OUT_DIR/qinip-windows"
 rm -rf "$STAGE"
 mkdir -p "$STAGE"
 cp "$EXE" "$STAGE/Qinip.exe"
-cp "$REPO_ROOT/USER_MANUAL.md" "$STAGE/" 2>/dev/null || true
 cp "$REPO_ROOT/README.md" "$STAGE/" 2>/dev/null || true
 
 (

@@ -18,3 +18,6 @@ pub mod theme;
 pub mod rekordbox;
 pub mod media;
 pub mod macos_icon;
+
+#[cfg(test)]
+mod ui_tests;

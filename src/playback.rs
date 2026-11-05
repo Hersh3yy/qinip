@@ -13,6 +13,8 @@ enum PlaybackCommand {
     Load(Arc<DecodedAudio>),
     QueueNext(Arc<DecodedAudio>),
     ClearNext,
+    /// Forget the loaded track entirely (Clear Playlist).
+    Unload,
     Play,
     Pause,
     SeekFrame(u64),
@@ -264,6 +266,12 @@ impl PlaybackEngine {
         Ok(())
     }
 
+    /// Stop and forget the loaded track; the transport reads 0:00 / 0:00.
+    pub fn unload(&self) -> anyhow::Result<()> {
+        self.cmd_tx.send(PlaybackCommand::Unload)?;
+        Ok(())
+    }
+
     /// Drop a staged gapless track (e.g. shuffle/repeat changed after preload).
     pub fn clear_queued(&self) -> anyhow::Result<()> {
         self.cmd_tx.send(PlaybackCommand::ClearNext)?;
@@ -375,6 +383,15 @@ impl PlaybackEngine {
             }
             PlaybackCommand::ClearNext => {
                 self.clear_queued_next();
+            }
+            PlaybackCommand::Unload => {
+                self.shared.playing.store(false, Ordering::Relaxed);
+                self.clear_queued_next();
+                self.clear_loop_internal();
+                *self.shared.track.lock().expect("playback track lock") = None;
+                self.shared.playhead_frame.store(0, Ordering::Relaxed);
+                self.shared.duration_frames.store(0, Ordering::Relaxed);
+                dev::log("unload");
             }
             PlaybackCommand::Play => {
                 self.shared.playing.store(true, Ordering::Relaxed);

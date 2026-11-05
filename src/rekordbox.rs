@@ -258,15 +258,25 @@ pub fn write_xml(path: &Path, xml: &str) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }
+    // Keep the previous export: a settings hiccup must not cost playlists.
+    if path.is_file() {
+        let _ = std::fs::copy(path, path.with_extension("xml.bak"));
+    }
     let tmp = path.with_extension("xml.qinip-tmp");
     std::fs::write(&tmp, xml)?;
     std::fs::rename(&tmp, path)
 }
 
 fn written_by_qinip(path: &Path) -> bool {
-    std::fs::read_to_string(path)
-        .map(|text| text.contains(&format!("<PRODUCT Name=\"{PRODUCT_NAME}\"")))
-        .unwrap_or(false)
+    use std::io::Read;
+    // The PRODUCT element is in the first lines; a 100 MB export from
+    // another tool must not be read whole on every click.
+    let Ok(file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut head = String::new();
+    let _ = file.take(4096).read_to_string(&mut head);
+    head.contains(&format!("<PRODUCT Name=\"{PRODUCT_NAME}\""))
 }
 
 fn home_dir() -> PathBuf {

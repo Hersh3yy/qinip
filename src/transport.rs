@@ -1,100 +1,69 @@
 //! CDJ-style transport buttons — brushed-metal look with a colored glow ring.
 
 use crate::theme::Palette;
-use eframe::egui::{self, Align2, Color32, FontId, Pos2, Rect, RichText, Sense, Stroke, Ui, Vec2};
+use eframe::egui::{self, Align2, Color32, FontId, Pos2, RichText, Sense, Stroke, Ui, Vec2};
 
-/// Which beat (1–4) within the current 4/4 bar, from playback position + BPM.
-pub fn beat_in_bar(position_secs: f64, bpm: f32) -> u8 {
-    if bpm <= 0.0 {
-        return 0;
+/// Fraction of the way into the current beat (0 = on the beat), counting
+/// beats from 0:00 at the given tempo.
+pub fn beat_phase(position_secs: f64, bpm: f32) -> f32 {
+    if bpm <= 0.0 || !position_secs.is_finite() {
+        return 0.0;
     }
     let beat_secs = 60.0 / bpm as f64;
-    let beat_index = (position_secs / beat_secs).floor() as u64;
-    ((beat_index % 4) + 1) as u8
+    (position_secs.max(0.0) / beat_secs).fract() as f32
 }
 
-/// CDJ-style bar position: four stacked ticks + beat number + BPM.
-pub fn beat_bar_indicator(ui: &mut Ui, position_secs: f64, bpm: Option<f32>, palette: &Palette) {
+/// Tempo readout: a light that pulses on every beat, plus the BPM.
+///
+/// It counts beats from 0:00, so it shows the tempo, not where beat 1 of a
+/// bar falls; that needs the beat grid (roadmap f7). The earlier 1-2-3-4 bar
+/// counter claimed more than it knew and drifted on most tracks.
+pub fn tempo_indicator(ui: &mut Ui, position_secs: f64, bpm: Option<f32>, palette: &Palette) {
     let accent = Color32::from_rgb(76, 201, 240);
-    let dim = palette.tick_dim;
-    let text = palette.text;
-    let weak = palette.text_weak;
-    let bar_w = 22.0;
-    let bar_h = 5.0;
-    let gap = 3.0;
-    let tick_count = 4.0;
-    let total_h: f32 = tick_count * bar_h + (tick_count - 1.0) * gap;
+    // Bright cyan reads on dark panels; light panels need a deeper one.
+    let bpm_color = if palette.is_dark {
+        accent
+    } else {
+        Color32::from_rgb(0x1F, 0x6F, 0x86)
+    };
 
     ui.vertical(|ui| {
-        ui.label(RichText::new("Bar").small().weak());
-        ui.horizontal(|ui| {
-            // Tall enough for the beat number above the BPM readout; ticks are
-            // inset by 1px so the lit tick's outside stroke isn't clipped.
-            let (rect, _) = ui.allocate_exact_size(
-                Vec2::new(bar_w + 52.0, total_h.max(BUTTON_SIZE) + 2.0),
-                Sense::hover(),
-            );
-            let tick_top = rect.top() + 1.0 + (rect.height() - 2.0 - total_h) * 0.5;
-            let painter = ui.painter_at(rect);
+        ui.label(RichText::new("Tempo").small().weak());
+        let (rect, _) = ui.allocate_exact_size(Vec2::new(96.0, BUTTON_SIZE), Sense::hover());
+        let painter = ui.painter_at(rect);
+        let light = Pos2::new(rect.left() + 12.0, rect.center().y);
+        let text_at = Pos2::new(rect.left() + 30.0, rect.center().y);
 
-            let Some(bpm) = bpm.filter(|b| *b > 0.0) else {
-                for i in 0..4 {
-                    let y = tick_top + i as f32 * (bar_h + gap);
-                    let tick = Rect::from_min_size(
-                        Pos2::new(rect.left() + 1.0, y),
-                        Vec2::new(bar_w, bar_h),
-                    );
-                    painter.rect_filled(tick, 1.0, dim);
-                }
-                painter.text(
-                    rect.left_center() + Vec2::new(bar_w + 10.0, 0.0),
-                    Align2::LEFT_CENTER,
-                    "—",
-                    FontId::proportional(18.0),
-                    weak,
-                );
-                return;
-            };
-
-            let current = beat_in_bar(position_secs, bpm);
-
-            for beat in 1..=4u8 {
-                let i = (beat - 1) as f32;
-                let y = tick_top + i * (bar_h + gap);
-                let tick = Rect::from_min_size(
-                    Pos2::new(rect.left() + 1.0, y),
-                    Vec2::new(bar_w, bar_h),
-                );
-                let lit = beat == current;
-                let fill = if lit { accent } else { dim };
-                painter.rect_filled(tick, 1.0, fill);
-                if lit {
-                    painter.rect_stroke(
-                        tick.expand(1.0),
-                        1.0,
-                        Stroke::new(1.0, accent.gamma_multiply(0.5)),
-                        egui::StrokeKind::Outside,
-                    );
-                }
-            }
-
-            let text_x = rect.left() + bar_w + 10.0;
+        let Some(bpm) = bpm.filter(|b| *b > 0.0) else {
+            painter.circle_filled(light, 8.0, palette.tick_dim);
             painter.text(
-                Pos2::new(text_x, rect.center().y - 7.0),
+                text_at,
                 Align2::LEFT_CENTER,
-                current.to_string(),
+                "—",
                 FontId::proportional(18.0),
-                text,
+                palette.text_weak,
             );
-            painter.text(
-                Pos2::new(text_x, rect.center().y + 10.0),
-                Align2::LEFT_CENTER,
-                format!("{bpm:.1}"),
-                FontId::monospace(13.0),
-                // Bright cyan reads on dark panels; light panels need a deeper one.
-                if palette.is_dark { accent } else { Color32::from_rgb(0x1F, 0x6F, 0x86) },
+            return;
+        };
+
+        // Full brightness on the beat, fading out before the next one.
+        let glow = (1.0 - beat_phase(position_secs, bpm)).powi(3);
+        painter.circle_filled(light, 8.0, palette.tick_dim);
+        painter.circle_filled(light, 8.0, accent.gamma_multiply(0.2 + 0.8 * glow));
+        if glow > 0.4 {
+            painter.circle_stroke(
+                light,
+                10.0 + 4.0 * glow,
+                Stroke::new(1.5, accent.gamma_multiply(0.6 * glow)),
             );
-        });
+        }
+        painter.text(
+            text_at,
+            Align2::LEFT_CENTER,
+            format!("{bpm:.1}"),
+            FontId::monospace(16.0),
+            bpm_color,
+        );
     });
 }
 
@@ -200,4 +169,18 @@ fn draw_button_label(painter: &egui::Painter, center: Pos2, label: &str, enabled
         egui::FontId::proportional(11.5),
         color,
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::beat_phase;
+
+    #[test]
+    fn phase_counts_from_zero_at_the_tempo() {
+        assert_eq!(beat_phase(0.0, 120.0), 0.0);
+        assert!((beat_phase(0.25, 120.0) - 0.5).abs() < 1e-6);
+        assert!(beat_phase(1.0, 120.0).abs() < 1e-5);
+        assert_eq!(beat_phase(3.0, 0.0), 0.0);
+        assert_eq!(beat_phase(f64::NAN, 120.0), 0.0);
+    }
 }

@@ -18,11 +18,13 @@ pub struct SystemMedia {
 }
 
 impl SystemMedia {
-    pub fn new(ctx: egui::Context) -> anyhow::Result<Self> {
+    /// `hwnd`: the Win32 window handle; required on Windows (souvlaki panics
+    /// without one), ignored elsewhere.
+    pub fn new(ctx: egui::Context, hwnd: Option<*mut std::ffi::c_void>) -> anyhow::Result<Self> {
         let config = PlatformConfig {
             dbus_name: "qinip",
             display_name: "Qinip",
-            hwnd: None,
+            hwnd,
         };
 
         let mut controls = MediaControls::new(config)?;

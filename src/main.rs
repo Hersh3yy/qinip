@@ -1,3 +1,6 @@
+// No console window behind the GUI on Windows.
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 use qinip::app::QinipApp;
 
 fn main() -> eframe::Result<()> {

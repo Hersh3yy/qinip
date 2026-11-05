@@ -3,7 +3,8 @@ name = "qinip"
 version = "1.0.0"
 edition = "2024"
 description = "Free MP3 pack audition player: playlist, coloured waveform, EQ, BPM/key analysis."
-# GPL because aubio (BPM/key detection) is GPL-3.0 and is compiled into the binary.
+# GPL-3.0-or-later: chosen when aubio (GPL) was a dependency; aubio is gone since 1.1.0,
+# so the licence is now a choice, not an obligation.
 license = "GPL-3.0-or-later"
 repository = "https://github.com/Hersh3yy/qinip"
 default-run = "qinip"
@@ -28,9 +29,6 @@ path = "src/bin/analyze.rs"
 anyhow = "1.0.103"
 fastrand = "2"
 serde = { version = "1", features = ["derive"] }
-# `builtin` compiles bundled aubio C sources; avoids Homebrew header layout mismatch
-# (`include/aubio/aubio.h` vs bindgen's `#include <aubio.h>`) on Apple Silicon.
-aubio-rs = { version = "0.2.0", features = ["bindgen", "builtin"] }
 biquad = "0.6.0"
 cpal = "0.18.1"
 # `persistence`: settings (volume, autoplay, tag-write opt-in) survive restarts.
@@ -38,14 +36,21 @@ eframe = { version = "0.36", features = ["persistence"] }
 egui = "0.36"
 id3 = "1.17.0"
 rfd = "0.17.2"
-ringbuf = "0.5.1"
 rustfft = "6.4.1"
 symphonia = { version = "0.5.4", features = ["mp3"] }
 walkdir = "2.5.0"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 souvlaki = "0.8.3"
 
+[target.'cfg(windows)'.dependencies]
+# The Win32 window handle for the media-keys integration (see src/media.rs).
+raw-window-handle = "0.6"
+
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6.4"
 objc2-foundation = "0.3.2"
 objc2-app-kit = { version = "0.3.2", features = ["NSImage"] }
+
+[dev-dependencies]
+# Headless UI tests: drives the real app without a window (src/ui_tests.rs).
+egui_kittest = { version = "0.36", features = ["eframe", "wgpu", "snapshot"] }

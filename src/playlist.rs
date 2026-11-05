@@ -5,6 +5,7 @@ use walkdir::WalkDir;
 
 use crate::decode::probe_metadata;
 use crate::key::to_camelot;
+use crate::tags::read_analysis_tags;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AnalysisState {
@@ -34,11 +35,28 @@ pub struct TrackEntry {
     /// `None` for loose files dropped onto the window. Drives the folder
     /// separators shown in the load-order view.
     pub source_folder: Option<PathBuf>,
+    /// The BPM came from the file's own tag (another tool wrote it), so
+    /// Qinip's analysis must not replace it.
+    pub tagged_bpm: bool,
+    /// Same for the key.
+    pub tagged_key: bool,
+    /// Where Qinip heard the first beat (seconds); beat k is at
+    /// `offset + k * 60 / bpm`. Only known for a Qinip-analyzed BPM.
+    pub beat_offset_secs: Option<f32>,
 }
 
 impl TrackEntry {
     pub fn from_path(path: PathBuf, load_order: u32, source_folder: Option<PathBuf>) -> Self {
         let meta = probe_metadata(&path);
+        // Trust what is already in the file: instant, and usually from a tool
+        // (Mixed In Key, rekordbox) that is more accurate than our analysis.
+        let tagged = read_analysis_tags(&path);
+        let camelot = tagged.key.as_deref().and_then(to_camelot);
+        let analysis = if tagged.bpm.is_some() && tagged.key.is_some() {
+            AnalysisState::Done
+        } else {
+            AnalysisState::Pending
+        };
         Self {
             path,
             source_folder,
@@ -46,10 +64,13 @@ impl TrackEntry {
             artist: meta.artist,
             track_number: meta.track_number,
             duration_secs: meta.duration_secs,
-            bpm: None,
-            key: None,
-            camelot: None,
-            analysis: AnalysisState::Pending,
+            tagged_bpm: tagged.bpm.is_some(),
+            tagged_key: tagged.key.is_some(),
+            beat_offset_secs: None,
+            bpm: tagged.bpm,
+            key: tagged.key,
+            camelot,
+            analysis,
             listened_secs: 0.0,
             played: false,
             load_order,
@@ -59,18 +80,27 @@ impl TrackEntry {
     /// Seconds of playback before we mark a track as "played" and allow autoplay chain.
     pub const PLAYED_THRESHOLD_SECS: f64 = 20.0;
 
+    /// 20 s, or 80 % of a track shorter than 25 s (a 15 s jingle can still
+    /// count as played, so autoplay keeps chaining).
+    pub fn played_threshold_secs(&self) -> f64 {
+        match self.duration_secs {
+            Some(d) if d > 0.0 => (0.8 * d).min(Self::PLAYED_THRESHOLD_SECS),
+            _ => Self::PLAYED_THRESHOLD_SECS,
+        }
+    }
+
     pub fn mark_listened(&mut self, additional_secs: f64) {
         if additional_secs <= 0.0 {
             return;
         }
         self.listened_secs += additional_secs;
-        if self.listened_secs >= Self::PLAYED_THRESHOLD_SECS {
+        if self.listened_secs >= self.played_threshold_secs() {
             self.played = true;
         }
     }
 
     pub fn qualifies_as_played(&self) -> bool {
-        self.played || self.listened_secs >= Self::PLAYED_THRESHOLD_SECS
+        self.played || self.listened_secs >= self.played_threshold_secs()
     }
 
     pub fn display_label(&self) -> String {
@@ -128,11 +158,41 @@ impl TrackEntry {
         }
     }
 
-    pub fn set_analysis_result(&mut self, bpm: f32, key: String) {
-        self.camelot = to_camelot(&key);
-        self.bpm = Some(bpm);
-        self.key = Some(key);
+    /// Store Qinip's analysis, keeping any value the file's tags already gave.
+    pub fn set_analysis_result(&mut self, bpm: f32, beat_offset_secs: f32, key: String) {
+        if !self.tagged_bpm {
+            self.bpm = (bpm > 0.0).then_some(bpm);
+            self.beat_offset_secs = (bpm > 0.0).then_some(beat_offset_secs);
+        }
+        if !self.tagged_key {
+            self.camelot = to_camelot(&key);
+            self.key = Some(key);
+        }
         self.analysis = AnalysisState::Done;
+    }
+
+    /// Forget the tagged values and queue a fresh Qinip analysis.
+    pub fn mark_for_reanalysis(&mut self) {
+        self.tagged_bpm = false;
+        self.tagged_key = false;
+        self.beat_offset_secs = None;
+        self.bpm = None;
+        self.key = None;
+        self.camelot = None;
+        self.analysis = AnalysisState::Pending;
+    }
+
+    /// Where the BPM/key values come from, for the tooltip.
+    pub fn analysis_source_label(&self) -> &'static str {
+        if self.analysis != AnalysisState::Done {
+            return "Not analyzed yet";
+        }
+        match (self.tagged_bpm, self.tagged_key) {
+            (true, true) => "BPM and key from the file's tags",
+            (true, false) => "BPM from the file's tags, key analyzed by Qinip",
+            (false, true) => "Key from the file's tags, BPM analyzed by Qinip",
+            (false, false) => "Analyzed by Qinip",
+        }
     }
 
     pub fn analysis_progress(&self) -> f32 {

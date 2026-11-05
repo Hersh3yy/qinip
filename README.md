@@ -27,6 +27,7 @@ Same idea here: load a bunch of songs, crack one open, see the waveform inside. 
 - BPM, musical key, and Camelot wheel codes — analyzed in the background
 - Transport controls, gapless autoplay, write BPM/key back to file tags
 - Right-click tracks — move, tag, open folder, remove from list, delete from disk
+- Send keepers to rekordbox playlists, shuffle/repeat, and seven colour themes
 
 ---
 
@@ -48,20 +49,6 @@ Get the latest release from **[GitHub Releases](https://github.com/Hersh3yy/qini
 **Windows:** SmartScreen may warn on an unsigned app: **More info → Run anyway**.
 
 Each release lists `SHA256SUMS.txt`, so you can check a download is untouched (`shasum -a 256 qinip-macos-arm64.dmg`).
-
-----------|------|------------|
-| **macOS** (Apple Silicon) | `qinip-macos-arm64.zip` | Unzip → drag `Qinip.app` to Applications |
-| **Windows** (x64) | `qinip-windows-x64.zip` | Unzip → run `Qinip.exe` |
-
-**macOS first launch:** if Gatekeeper blocks the app:
-
-```bash
-xattr -cr ~/Applications/Qinip.app
-```
-
-Then right-click → Open → Open.
-
-**Windows:** SmartScreen may warn — More info → Run anyway (unsigned build).
 
 ---
 
@@ -101,7 +88,9 @@ Then right-click → Open → Open.
 | **Remove from playlist** | Drop from the list only (file stays on disk) |
 | **Open enclosing folder** | Opens the containing folder in Finder / Explorer |
 | **Move to folder…** | Pick a destination; moves the MP3 on disk (works across drives) and removes it from the playlist. If a file with the same name exists there, you're asked whether to replace it |
-| **Write BPM/Key tags** | Writes analysis into the file's ID3 tags (`TBPM`, `TKEY`), only filling missing tags. Requires analysis finished |
+| **Add to Rekordbox playlist ▸** | Put the song (or the whole selection) in a Qinip playlist that rekordbox can import (see below) |
+| **Write BPM/Key tags** | Writes analysis into the file's ID3 tags (`TBPM`, `TKEY` as `Am`/`F#`), only filling missing tags. Requires analysis finished |
+| **Re-analyze BPM/Key** | Ignore the BPM/key stored in the file and let Qinip listen again |
 | **Delete from disk…** | Permanently deletes the MP3 after a confirm dialog — **cannot be undone** |
 
 ### Columns
@@ -112,8 +101,8 @@ Then right-click → Open → Open.
 | **Artist** | From tags, or "Unknown Artist" |
 | **Title** | From tags, or filename; bar fills while loading/analyzing |
 | **Duration** | Length |
-| **BPM** | Estimated tempo |
-| **Key** | Estimated musical key |
+| **BPM** | From the file's tag when it has one, else measured by Qinip. Hover the value to see which |
+| **Key** | From the file's tag (`Am`, `8A`, `A Minor` are all understood), else detected by Qinip |
 | **Camelot** | Same key as Camelot wheel code (e.g. `8A`) |
 | **Played** | ✓ after you've listened ≥ ~20 seconds (pauses don't count) |
 
@@ -123,13 +112,14 @@ Hover the title to see the original filename.
 
 - **Transport buttons** (beside the EQ knobs): Previous · Play/Pause · Next · Stop · ±10s seek · Shuffle · Repeat (click to cycle off → all → one).
 - **Shuffle** plays every track once in random order before repeating any; **Previous** steps back through what actually played. **Repeat one** replays the track at its end, but **Next** still moves on.
+- **Tempo** light (right of the loop buttons): pulses on every beat Qinip heard, with the BPM. The 2/4/8/16 loop buttons snap to that beat grid.
 - **Seek bar** (bottom): drag to jump in time.
 - **Volume** (right of the transport buttons): fader with % readout; the speaker button mutes and unmutes. Volume is remembered between launches.
-- **Autoplay**: when on, plays the next playlist row after the current track finishes (gapless when the next file is already decoded), but only if that track was "played" (≥ 20s listened).
+- **Autoplay**: when on, plays the next playlist row after the current track finishes (gapless when the next file is already decoded), but only if that track was "played" (20 s listened, or 80 % of a track shorter than 25 s).
 
 ### Themes
 
-Pick a theme from the dropdown in the top bar: **Match system** (follows your OS light/dark setting), **Dark**, **Light**, **Solarized Dark** or **Solarized Light**. The waveform keeps its dark screen in every theme so the band colours stay easy to read. Your choice is remembered.
+Pick a theme from the dropdown in the top bar: **Match system** (follows your OS light/dark setting), **Dark**, **Light**, **Red**, **Forest Green**, **Solarized Dark** or **Solarized Light**. The waveform keeps its dark screen in every theme so the band colours stay easy to read. Your choice is remembered.
 
 ### Waveform & EQ
 
@@ -164,7 +154,7 @@ Qinip only reads your MP3s, unless you ask it to change them. Writing BPM/Key in
 
 ### Not yet in Qinip
 
-Tempo/pitch or multi-deck mixing · Apple notarization / Windows Authenticode (Gatekeeper / SmartScreen may warn) · Camelot/custom tag writing (BPM + Key only) · Rekordbox export.
+Tempo/pitch or multi-deck mixing · a bar counter / metronome (the tempo light follows the beat; where each bar starts is next) · Apple notarization / Windows Authenticode (Gatekeeper / SmartScreen may warn) · Camelot/custom tag writing (BPM + Key only).
 
 ---
 
@@ -193,7 +183,7 @@ Architecture, roadmap, and dev notes live in [`PROJECT.md`](./PROJECT.md).
 
 ## License
 
-Qinip is free software under the [GNU General Public License v3.0 or later](./LICENSE). BPM and key detection is done by [aubio](https://aubio.org) (GPL-3.0). Licenses of all bundled open-source libraries are in [`assets/THIRD_PARTY_LICENSES.html`](./assets/THIRD_PARTY_LICENSES.html), which also ships inside the app. Click **About** in the app for the short version.
+Qinip is free software under the [GNU General Public License v3.0 or later](./LICENSE). Licenses of all bundled open-source libraries are in [`assets/THIRD_PARTY_LICENSES.html`](./assets/THIRD_PARTY_LICENSES.html), which also ships inside the app. Click **About** in the app for the short version.
 
 ## Support
 

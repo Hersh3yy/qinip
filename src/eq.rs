@@ -57,17 +57,28 @@ pub struct LiveEq {
     hi: DirectForm1<f32>,
 }
 
+/// Band cut-offs in Hz: low < 250, low-mid around 1 k, hi-mid around 4 k, hi > 6 k.
+const LOW_HZ: f32 = 250.0;
+const LOW_MID_HZ: f32 = 1000.0;
+const HI_MID_HZ: f32 = 4000.0;
+const HI_HZ: f32 = 6000.0;
+
+/// Filter coefficients that can never fail: a cut-off is pulled below the
+/// Nyquist limit for low sample rates (an 11 kHz voice memo or an 8 kHz
+/// Bluetooth headset would otherwise make the maths refuse and the app die).
+fn coefficients(kind: Type<f32>, sample_rate: u32, cutoff_hz: f32, q: f32) -> Coefficients<f32> {
+    let fs_hz = (sample_rate.max(1000) as f32).max(1000.0);
+    let f0 = cutoff_hz.min(fs_hz * 0.45);
+    Coefficients::<f32>::from_params(kind, fs_hz.hz(), f0.hz(), q)
+        .expect("cut-off is below Nyquist after clamping")
+}
+
 impl LiveEq {
     pub fn new(sample_rate: u32) -> Self {
-        let fs = (sample_rate as f32).hz();
-        let low = Coefficients::<f32>::from_params(Type::LowPass, fs, 250.0.hz(), Q_BUTTERWORTH_F32)
-            .expect("low EQ coeffs");
-        let low_mid = Coefficients::<f32>::from_params(Type::BandPass, fs, 1000.0.hz(), 0.7)
-            .expect("low-mid EQ coeffs");
-        let hi_mid = Coefficients::<f32>::from_params(Type::BandPass, fs, 4000.0.hz(), 0.7)
-            .expect("hi-mid EQ coeffs");
-        let hi = Coefficients::<f32>::from_params(Type::HighPass, fs, 6000.0.hz(), Q_BUTTERWORTH_F32)
-            .expect("hi EQ coeffs");
+        let low = coefficients(Type::LowPass, sample_rate, LOW_HZ, Q_BUTTERWORTH_F32);
+        let low_mid = coefficients(Type::BandPass, sample_rate, LOW_MID_HZ, 0.7);
+        let hi_mid = coefficients(Type::BandPass, sample_rate, HI_MID_HZ, 0.7);
+        let hi = coefficients(Type::HighPass, sample_rate, HI_HZ, Q_BUTTERWORTH_F32);
 
         Self {
             low: DirectForm1::<f32>::new(low),
@@ -119,16 +130,10 @@ pub struct BandWaveform {
 }
 
 pub fn band_waveform_peaks(mono: &[f32], sample_rate: u32, num_peaks: usize) -> BandWaveform {
-    let fs = (sample_rate as f32).hz();
-    let low_c =
-        Coefficients::<f32>::from_params(Type::LowPass, fs, 250.0.hz(), Q_BUTTERWORTH_F32).unwrap();
-    let lowmid_c =
-        Coefficients::<f32>::from_params(Type::BandPass, fs, 1000.0.hz(), 0.7).unwrap();
-    let himid_c =
-        Coefficients::<f32>::from_params(Type::BandPass, fs, 4000.0.hz(), 0.7).unwrap();
-    let hi_c =
-        Coefficients::<f32>::from_params(Type::HighPass, fs, 6000.0.hz(), Q_BUTTERWORTH_F32)
-            .unwrap();
+    let low_c = coefficients(Type::LowPass, sample_rate, LOW_HZ, Q_BUTTERWORTH_F32);
+    let lowmid_c = coefficients(Type::BandPass, sample_rate, LOW_MID_HZ, 0.7);
+    let himid_c = coefficients(Type::BandPass, sample_rate, HI_MID_HZ, 0.7);
+    let hi_c = coefficients(Type::HighPass, sample_rate, HI_HZ, Q_BUTTERWORTH_F32);
 
     let mut low_f = DirectForm1::<f32>::new(low_c);
     let mut lowmid_f = DirectForm1::<f32>::new(lowmid_c);
@@ -175,3 +180,18 @@ pub const BAND_COLORS: [(u8, u8, u8); 4] = [
 ];
 
 pub const BAND_LABELS: [&str; 4] = ["Low", "LowMid", "HiMid", "Hi"];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn low_sample_rates_do_not_panic() {
+        for rate in [8_000, 11_025, 12_000, 16_000, 22_050, 44_100, 96_000] {
+            let _ = LiveEq::new(rate);
+            let mono = vec![0.1f32; rate as usize];
+            let peaks = band_waveform_peaks(&mono, rate, 50);
+            assert!(!peaks.low.is_empty(), "{rate}");
+        }
+    }
+}

@@ -77,6 +77,79 @@ pub fn to_camelot(key_name: &str) -> Option<String> {
     Some(format!("{number}{mode}"))
 }
 
+/// Camelot code (`"8A"`, `"8b"`, `"08A"`) back to a key name (`"A Minor"`).
+/// Sharps are used for the black keys, matching `detect_key`.
+pub fn from_camelot(code: &str) -> Option<String> {
+    let code = code.trim().to_ascii_uppercase();
+    let (number, mode) = code.split_at(code.len().checked_sub(1)?);
+    let number: u8 = number.parse().ok()?;
+    let notes = match mode {
+        "B" => ["B", "F#", "C#", "G#", "D#", "A#", "F", "C", "G", "D", "A", "E"],
+        "A" => ["G#", "D#", "A#", "F", "C", "G", "D", "A", "E", "B", "F#", "C#"],
+        _ => return None,
+    };
+    let note = notes.get(usize::from(number).checked_sub(1)?)?;
+    Some(format!("{note} {}", if mode == "B" { "Major" } else { "Minor" }))
+}
+
+/// The ID3 / rekordbox / Mixed In Key short form: `"A Minor"` → `"Am"`,
+/// `"C# Major"` → `"C#"`.
+pub fn short_key(key_name: &str) -> Option<String> {
+    if let Some(note) = key_name.strip_suffix(" Minor") {
+        Some(format!("{note}m"))
+    } else {
+        key_name.strip_suffix(" Major").map(str::to_string)
+    }
+}
+
+/// Read a key the way other tools write it into TKEY, and return Qinip's own
+/// name (`"A Minor"`, `"C# Major"`). Accepts `Am`, `A#m`, `Bbm`, `A minor`,
+/// `Amin`, `A min`, `Amaj`, `A`, `A Major` and Camelot codes (`8A`). Flats
+/// become sharps so one key has one spelling.
+pub fn normalize_key_tag(raw: &str) -> Option<String> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return None;
+    }
+    if let Some(key) = from_camelot(raw) {
+        return Some(key);
+    }
+
+    let mut chars = raw.chars();
+    let letter = chars.next()?.to_ascii_uppercase();
+    if !('A'..='G').contains(&letter) {
+        return None;
+    }
+    let mut rest: &str = chars.as_str();
+    let mut note = letter.to_string();
+    if let Some(r) = rest.strip_prefix('#') {
+        note.push('#');
+        rest = r;
+    } else if let Some(r) = rest.strip_prefix('b').or_else(|| rest.strip_prefix('♭')) {
+        note = match letter {
+            'C' => "B".into(),
+            'D' => "C#".into(),
+            'E' => "D#".into(),
+            'F' => "E".into(),
+            'G' => "F#".into(),
+            'A' => "G#".into(),
+            _ => "A#".into(),
+        };
+        rest = r;
+    } else if let Some(r) = rest.strip_prefix('♯') {
+        note.push('#');
+        rest = r;
+    }
+
+    let mode = rest.trim().trim_start_matches(['-', '_']).trim().to_ascii_lowercase();
+    let minor = match mode.as_str() {
+        "" | "maj" | "major" | "dur" => false,
+        "m" | "min" | "minor" | "moll" => true,
+        _ => return None,
+    };
+    Some(format!("{note} {}", if minor { "Minor" } else { "Major" }))
+}
+
 fn compute_chroma_vector(mono: &[f32], sample_rate: u32) -> [f32; 12] {
     let window_size = 4096;
     let hop_size = 2048;
@@ -152,7 +225,7 @@ fn pearson_correlation(a: &[f32; 12], b: &[f32; 12]) -> f32 {
 
 #[cfg(test)]
 mod tests {
-    use super::to_camelot;
+    use super::{from_camelot, normalize_key_tag, short_key, to_camelot};
 
     #[test]
     fn camelot_common_keys() {
@@ -162,5 +235,49 @@ mod tests {
         assert_eq!(to_camelot("E Minor").as_deref(), Some("9A"));
         assert_eq!(to_camelot("F Major").as_deref(), Some("7B"));
         assert_eq!(to_camelot("D Minor").as_deref(), Some("7A"));
+    }
+
+    #[test]
+    fn camelot_round_trips() {
+        for code in ["1A", "5A", "8A", "12A", "1B", "8B", "12B"] {
+            let name = from_camelot(code).unwrap();
+            assert_eq!(to_camelot(&name).as_deref(), Some(code), "{code} → {name}");
+        }
+        assert_eq!(from_camelot("8a").as_deref(), Some("A Minor"));
+        assert_eq!(from_camelot("08A").as_deref(), Some("A Minor"));
+        assert_eq!(from_camelot("13A"), None);
+        assert_eq!(from_camelot("A"), None);
+    }
+
+    #[test]
+    fn short_form_matches_id3_convention() {
+        assert_eq!(short_key("A Minor").as_deref(), Some("Am"));
+        assert_eq!(short_key("C# Major").as_deref(), Some("C#"));
+        assert_eq!(short_key("nonsense"), None);
+    }
+
+    #[test]
+    fn reads_keys_the_way_other_tools_write_them() {
+        for (raw, want) in [
+            ("Am", "A Minor"),
+            ("A#m", "A# Minor"),
+            ("Bbm", "A# Minor"),
+            ("Db", "C# Major"),
+            ("A minor", "A Minor"),
+            ("A Minor", "A Minor"),
+            ("Amin", "A Minor"),
+            ("A min", "A Minor"),
+            ("Amaj", "A Major"),
+            ("A", "A Major"),
+            ("F#", "F# Major"),
+            ("8A", "A Minor"),
+            ("8B", "C Major"),
+            ("  Gm ", "G Minor"),
+        ] {
+            assert_eq!(normalize_key_tag(raw).as_deref(), Some(want), "{raw}");
+        }
+        for bad in ["", "H", "Xm", "A sus4", "123"] {
+            assert_eq!(normalize_key_tag(bad), None, "{bad}");
+        }
     }
 }

@@ -17,15 +17,19 @@ pub enum ThemeChoice {
     System,
     Dark,
     Light,
+    Red,
+    ForestGreen,
     SolarizedDark,
     SolarizedLight,
 }
 
 impl ThemeChoice {
-    pub const ALL: [ThemeChoice; 5] = [
+    pub const ALL: [ThemeChoice; 7] = [
         ThemeChoice::System,
         ThemeChoice::Dark,
         ThemeChoice::Light,
+        ThemeChoice::Red,
+        ThemeChoice::ForestGreen,
         ThemeChoice::SolarizedDark,
         ThemeChoice::SolarizedLight,
     ];
@@ -35,6 +39,8 @@ impl ThemeChoice {
             ThemeChoice::System => "Match system",
             ThemeChoice::Dark => "Dark",
             ThemeChoice::Light => "Light",
+            ThemeChoice::Red => "Red",
+            ThemeChoice::ForestGreen => "Forest Green",
             ThemeChoice::SolarizedDark => "Solarized Dark",
             ThemeChoice::SolarizedLight => "Solarized Light",
         }
@@ -53,6 +59,8 @@ impl ThemeChoice {
             }
             ThemeChoice::Dark => Palette::dark(),
             ThemeChoice::Light => Palette::light(),
+            ThemeChoice::Red => Palette::red(),
+            ThemeChoice::ForestGreen => Palette::forest_green(),
             ThemeChoice::SolarizedDark => Palette::solarized_dark(),
             ThemeChoice::SolarizedLight => Palette::solarized_light(),
         }
@@ -152,6 +160,66 @@ impl Palette {
             screen_bg: rgb(0x24272A),
             playhead: rgb(0xFFFFFF),
             tick_dim: rgb(0xCFCDC8),
+        }
+    }
+
+    /// Deep maroon panels with a coral accent.
+    pub fn red() -> Self {
+        Self {
+            is_dark: true,
+            panel: rgb(0x2B1518),
+            recessed: rgb(0x1E0F11),
+            control: rgb(0x3F2024),
+            control_hover: rgb(0x532A2F),
+            accent: rgb(0xFF5C5C),
+            accent_text: rgb(0xFF8A80),
+            on_accent: rgb(0x1E0F11),
+            text: rgb(0xF4E6E6),
+            text_weak: rgb(0xB89698),
+            row_bg: rgb(0x1E0F11),
+            row_text: rgb(0xFAEFEF),
+            focus_outline: rgb(0xFAEFEF),
+            fill_failed: rgb(0x6E2222),
+            fill_done: rgb(0x274A2E),
+            fill_busy: rgb(0x5A4614),
+            fill_pending: rgb(0x3A2024),
+            value_failed: rgb(0xFF8A80),
+            value_done: rgb(0x9AE6A0),
+            value_busy: rgb(0xF2D24B),
+            value_pending: rgb(0xB89698),
+            screen_bg: rgb(0x1E0F11),
+            playhead: rgb(0xFFFFFF),
+            tick_dim: rgb(0x3F2024),
+        }
+    }
+
+    /// Dark pine panels with a leaf-green accent.
+    pub fn forest_green() -> Self {
+        Self {
+            is_dark: true,
+            panel: rgb(0x16261C),
+            recessed: rgb(0x0F1A13),
+            control: rgb(0x22372A),
+            control_hover: rgb(0x2C4636),
+            accent: rgb(0x7CD992),
+            accent_text: rgb(0x9FE6AE),
+            on_accent: rgb(0x0F1A13),
+            text: rgb(0xE6F0E8),
+            text_weak: rgb(0x9DB5A3),
+            row_bg: rgb(0x0F1A13),
+            row_text: rgb(0xF0F7F1),
+            focus_outline: rgb(0xF0F7F1),
+            fill_failed: rgb(0x5A2424),
+            fill_done: rgb(0x27512F),
+            fill_busy: rgb(0x4F4A1A),
+            fill_pending: rgb(0x22372A),
+            value_failed: rgb(0xFF8A80),
+            value_done: rgb(0xA8F0B0),
+            value_busy: rgb(0xF2D24B),
+            value_pending: rgb(0x9DB5A3),
+            screen_bg: rgb(0x0F1A13),
+            playhead: rgb(0xFFFFFF),
+            tick_dim: rgb(0x22372A),
         }
     }
 
@@ -256,7 +324,9 @@ impl Palette {
 
         visuals.widgets.active.bg_fill = self.accent;
         visuals.widgets.active.weak_bg_fill = self.accent;
-        visuals.widgets.active.fg_stroke.color = self.on_accent;
+        // egui also uses the "active" text colour for `RichText::strong()`,
+        // so it must be readable on the panel, not only on the accent fill.
+        visuals.widgets.active.fg_stroke.color = self.text;
 
         visuals.widgets.open.bg_fill = self.control_hover;
         visuals.widgets.open.weak_bg_fill = self.control_hover;
