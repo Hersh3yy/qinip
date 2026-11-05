@@ -168,9 +168,9 @@ Release is next week. Order is risk reduced per hour; full detail per item in `d
 - [ ] "New version available" check: fetch `latest.json` from Hiren's site on launch, dismissable banner, off-switch, privacy note updated. <!-- id:p6 cu:123kjkdmpxw -->
 - [ ] Download page on Hiren's site: per-OS buttons, version, size, SHA-256, min OS, changelog, uninstall steps, license + source link. <!-- id:p7 cu:123kjkdmpxx -->
 - [ ] Windows: real installer + uninstaller (prototype Velopack), OV Authenticode cert, test on a real Windows machine. <!-- id:p8 cu:123kjkdmpxy -->
-- [x] Shuffle + repeat (off/all/one) in the transport; rules unit-tested. <!-- id:p9 -->
-- [x] Themes: Match system, Dark, Light, Solarized Dark, Solarized Light; palette contrast tested. <!-- id:p10 -->
-- [x] Stable release asset names (`qinip-macos-arm64.dmg/.zip`, `qinip-windows-x64.zip`) + `SHA256SUMS.txt` from CI, so the website links `releases/latest/download/<name>` forever. <!-- id:p11 -->
+- [x] Shuffle + repeat (off/all/one) in the transport; rules unit-tested. <!-- id:p9 cu:123kjkdpukz -->
+- [x] Themes: Match system, Dark, Light, Solarized Dark, Solarized Light; palette contrast tested. <!-- id:p10 cu:123kjkdpum0 -->
+- [x] Stable release asset names (`qinip-macos-arm64.dmg/.zip`, `qinip-windows-x64.zip`) + `SHA256SUMS.txt` from CI, so the website links `releases/latest/download/<name>` forever. <!-- id:p11 cu:123kjkdpum1 -->
 
 ## Roadmap — far future
 
@@ -185,7 +185,7 @@ Release is next week. Order is risk reduced per hour; full detail per item in `d
 - [ ] souvlaki 0.8.3 pulls `block 0.1.6` (old `cocoa`), which a future Rust will reject. Watch for a souvlaki release or patch it. <!-- id:f6 cu:123kjkdmpy7 -->
 - [ ] Beat-synced Bar counter / metronome: today's counter assumes beat 1 at 0:00, so it drifts from the music on most tracks. Needs a beat grid (first-downbeat offset from aubio onsets), then the counter and a click track can follow it. <!-- id:f7 cu:123kjkdmpy8 -->
   Plan: (1) keep aubio's per-beat times during analysis, not just the BPM; (2) refine BPM with a line fit through them, grid phase = circular mean of beat-time mod period; (3) guess the downbeat as the phase whose beats carry the most Low-band energy (kick on the 1); (4) a "set beat 1 here" nudge for when the guess is wrong, like Rekordbox's grid adjust; (5) counter and loop buttons snap to the grid; (6) metronome = a click mixed in the audio callback at grid times. About two sessions.
-- [x] Rekordbox bridge via rekordbox XML, the import format Pioneer documents and Rekordbox 6/7 read. Qinip keeps its own playlists and writes them to one XML file; right-click → "Add to Rekordbox playlist ▸ <name> / New…". One-time Rekordbox setup (Preferences > Advanced > Database > rekordbox xml; show "rekordbox xml" in the tree), then refresh + Import in Rekordbox. Not writing Rekordbox's own `master.db` (encrypted, undocumented, can corrupt the library). Check against Hiren's Rekordbox version first. <!-- id:f9 -->
+- [x] Rekordbox bridge via rekordbox XML, the import format Pioneer documents and Rekordbox 6/7 read. Qinip keeps its own playlists and writes them to one XML file; right-click → "Add to Rekordbox playlist ▸ <name> / New…". One-time Rekordbox setup (Preferences > Advanced > Database > rekordbox xml; show "rekordbox xml" in the tree), then refresh + Import in Rekordbox. Not writing Rekordbox's own `master.db` (encrypted, undocumented, can corrupt the library). Check against Hiren's Rekordbox version first. <!-- id:f9 cu:123kjkdpum2 -->
 - [ ] Velopack auto-update (replaces the p6 banner with in-app updates). <!-- id:f8 cu:123kjkdmpy9 -->
 
 ---
