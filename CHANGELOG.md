@@ -19,6 +19,7 @@ Work in progress goes under **Unreleased**. `scripts/release.sh` turns that sect
 - Qinip reads the BPM and key already stored in your files (`TBPM`/`TKEY`, whether written as `Am`, `8A` or `A Minor`), so a tagged library shows them instantly with no analysis. Hover a value to see where it came from; right-click → Re-analyze BPM/Key lets Qinip listen anyway.
 - A tempo light next to the transport pulses on the beats Qinip heard; the 2/4/8/16 loop buttons snap to that beat grid.
 - Two more themes: Red and Forest Green.
+- Windows installer (`qinip-setup-x64.exe`): Start menu entry, uninstaller in Settings → Apps, no admin needed; the exe has an icon now. The zip stays as the portable version.
 
 ### Changed
 - Writing BPM/Key into your MP3 files is now opt-in (off by default). Qinip no longer changes your files unless you ask.

@@ -1,0 +1,61 @@
+name: Cut release
+
+# Cut a release from the GitHub website, no terminal:
+#   Actions → Cut release → Run workflow → type the version (e.g. 1.2.0).
+# Same checks and steps as scripts/release.sh (it runs that script), then it
+# starts the Release workflow on the new tag, which builds and publishes.
+# "Only check" runs everything except the commit, tag and push.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, e.g. 1.2.0"
+        required: true
+        type: string
+      dry_run:
+        description: "Only check (no commit, tag or push)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  cut:
+    name: Cut v${{ inputs.version }}
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: master
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Git identity for the release commit
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Check only
+        if: ${{ inputs.dry_run }}
+        run: ./scripts/release.sh "${{ inputs.version }}" --dry-run
+
+      - name: Bump, tag and push
+        if: ${{ !inputs.dry_run }}
+        run: ./scripts/release.sh "${{ inputs.version }}" --yes
+
+      # A tag pushed with GITHUB_TOKEN does not start other workflows by
+      # itself, so start the build explicitly on the new tag.
+      - name: Start the release build
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run release.yml --ref "v${{ inputs.version }}"

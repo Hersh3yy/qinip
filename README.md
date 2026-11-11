@@ -38,7 +38,7 @@ Get the latest release from **[GitHub Releases](https://github.com/Hersh3yy/qini
 | Platform | File | What to do |
 |----------|------|------------|
 | **macOS** (Apple Silicon) | `qinip-macos-arm64.dmg` | Open it → drag Qinip to Applications |
-| **Windows** (x64) | `qinip-windows-x64.zip` | Unzip → run `Qinip.exe` |
+| **Windows** (x64) | `qinip-setup-x64.exe` | Run it → Qinip lands in the Start menu (uninstall from Settings → Apps). Portable version: `qinip-windows-x64.zip` |
 
 **macOS, first launch only.** Qinip is not notarized by Apple (that costs 99 USD a year), so macOS blocks the first launch:
 

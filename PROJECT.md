@@ -53,7 +53,8 @@ Plain-words version, with the why and the launch checklist: `docs/releasing.md`.
 - Every user-visible change adds a line under `## [Unreleased]` in `CHANGELOG.md`, in the same commit.
 - CI (`.github/workflows/ci.yml`) runs tests + strict clippy on every push to `master` and every pull request.
 - A release is cut once in a while, only from `master`, only with `./scripts/release.sh X.Y.Z` (try `--dry-run` first). It checks branch, clean tree, version, changelog, tests; moves Unreleased into the version; bumps `Cargo.toml`; commits and tags; asks before pushing.
-- The pushed tag starts `release.yml`: it refuses a tag that doesn't match `Cargo.toml` or has no changelog section, builds Mac + Windows, and publishes the GitHub release with that changelog section and download/"Open Anyway" instructions. Nothing else ever creates a release.
+- The pushed tag starts `release.yml`: it refuses a tag that doesn't match `Cargo.toml` or has no changelog section, builds Mac (dmg + zip) + Windows (installer + zip), and publishes the GitHub release with that changelog section and download/"Open Anyway" instructions. Nothing else ever creates a release.
+- No terminal needed: Actions → **Cut release** (`.github/workflows/cut-release.yml`) runs `release.sh` on `master` with `--yes` and then starts `release.yml` on the tag (a tag pushed by GITHUB_TOKEN does not trigger workflows by itself). "Only check" = dry run.
 - Version numbers: bug fixes only = patch (1.1.1), new features = minor (1.2.0), breaking saved data/behaviour = major (2.0.0).
 
 ## Status
@@ -182,6 +183,7 @@ Release is next week. Order is risk reduced per hour; full detail per item in `d
 - [ ] "New version available" check: fetch `latest.json` from Hiren's site on launch, dismissable banner, off-switch, privacy note updated. <!-- id:p6 cu:123kjkdmpxw -->
 - [ ] Download page on Hiren's site: per-OS buttons, version, size, SHA-256, min OS, changelog, uninstall steps, license + source link. <!-- id:p7 cu:123kjkdmpxx -->
 - [ ] Windows: real installer + uninstaller (prototype Velopack), OV Authenticode cert, test on a real Windows machine. <!-- id:p8 cu:123kjkdmpxy -->
+  Installer done with Inno Setup (`scripts/windows/qinip.iss`, CI builds `qinip-setup-x64.exe`; exe icon via `build.rs` + winresource). Velopack (auto-update) and the cert remain.
 - [x] Shuffle + repeat (off/all/one) in the transport; rules unit-tested. <!-- id:p9 cu:123kjkdpukz -->
 - [x] Themes: Match system, Dark, Light, Solarized Dark, Solarized Light; palette contrast tested. <!-- id:p10 cu:123kjkdpum0 -->
 - [x] Stable release asset names (`qinip-macos-arm64.dmg/.zip`, `qinip-windows-x64.zip`) + `SHA256SUMS.txt` from CI, so the website links `releases/latest/download/<name>` forever. <!-- id:p11 cu:123kjkdpum1 -->

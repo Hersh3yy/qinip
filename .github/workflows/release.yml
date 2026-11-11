@@ -118,11 +118,26 @@ jobs:
           cd dist
           7z a -tzip ../qinip-windows-x64.zip *
 
+      # The installer: Start menu entry, uninstaller in Settings > Apps, no
+      # admin needed. The zip above stays as the portable option.
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Build installer
+        shell: bash
+        run: |
+          VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+          "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" "/DAppVersion=$VERSION" scripts/windows/qinip.iss
+          cp target/release/qinip-setup-x64.exe .
+          ls -la qinip-setup-x64.exe
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: qinip-windows-x64
-          path: qinip-windows-x64.zip
+          path: |
+            qinip-windows-x64.zip
+            qinip-setup-x64.exe
 
   publish:
     name: Publish GitHub Release
@@ -140,9 +155,9 @@ jobs:
       - name: Flatten artifacts
         run: |
           mkdir -p release-assets
-          find artifacts -type f \( -name '*.zip' -o -name '*.dmg' \) -exec cp {} release-assets/ \;
+          find artifacts -type f \( -name '*.zip' -o -name '*.dmg' -o -name '*.exe' \) -exec cp {} release-assets/ \;
           # Checksums let people verify a download is untouched.
-          (cd release-assets && sha256sum *.zip *.dmg > SHA256SUMS.txt)
+          (cd release-assets && sha256sum *.zip *.dmg *.exe > SHA256SUMS.txt)
           ls -la release-assets
 
       - name: Release notes from CHANGELOG.md
@@ -155,7 +170,7 @@ jobs:
             echo "- **macOS (Apple Silicon):** \`qinip-macos-arm64.dmg\`. Open it, drag Qinip to Applications."
             echo "  The Mac build is not notarized by Apple yet, so the first time macOS blocks it:"
             echo "  open **System Settings → Privacy & Security**, scroll down, click **Open Anyway** next to Qinip, confirm. Only needed once."
-            echo "- **Windows (x64):** \`qinip-windows-x64.zip\`. Unzip, run \`Qinip.exe\`. If SmartScreen warns: **More info → Run anyway**."
+            echo "- **Windows (x64):** \`qinip-setup-x64.exe\`. Run it; it installs Qinip, adds it to the Start menu and to Settings → Apps for uninstalling. If SmartScreen warns: **More info → Run anyway**. Prefer no installer? \`qinip-windows-x64.zip\` is the portable version."
             echo "- \`SHA256SUMS.txt\` lets you check a download is untouched."
             echo ""
             echo "## What's new"

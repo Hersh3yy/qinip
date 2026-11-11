@@ -47,10 +47,12 @@ checksums, the "Open Anyway" steps.)
    `## [Unreleased]` in `CHANGELOG.md` as Added / Changed / Fixed. This text becomes the release
    page, so write it for a DJ, not for yourself ("Shuffle no longer repeats a track before every
    track played once", not "fix history reset").
-3. **Dry run:** `./scripts/release.sh 1.2.0 --dry-run`. It checks the branch, the clean tree, the
-   version, the changelog, the tests and clippy, and changes nothing.
-4. **Real run:** `./scripts/release.sh 1.2.0`. It moves Unreleased under `## [1.2.0] - <date>`,
-   bumps `Cargo.toml`, commits, tags `v1.2.0`, and asks before pushing. Say yes.
+3. **Dry run:** on GitHub, Actions → **Cut release** → Run workflow → version `1.2.0`, tick
+   "Only check". (Terminal equivalent: `./scripts/release.sh 1.2.0 --dry-run`.) It checks the
+   branch, the clean tree, the version, the changelog, the tests and clippy, and changes nothing.
+4. **Real run:** the same button without the tick (terminal: `./scripts/release.sh 1.2.0`). It
+   moves Unreleased under `## [1.2.0] - <date>`, bumps `Cargo.toml`, commits, tags `v1.2.0`,
+   pushes, and starts the build.
 5. **Wait for the tag build** (Actions tab, ~15 minutes): it refuses a tag that does not match
    `Cargo.toml` or the changelog, builds Mac and Windows, writes `SHA256SUMS.txt`, and publishes
    the release page with your changelog section plus the download instructions.
@@ -86,7 +88,7 @@ Free and open is a set of promises; write them where people decide to download:
   Anyway. Notarization needs the paid Apple Developer account (99 USD/year); then
   `scripts/package-macos.sh` with `SIGN_IDENTITY` and `NOTARY_PROFILE` does the rest, and CI does
   it from secrets. Until then, every download page says the three steps.
-- **Windows** shows SmartScreen's "unknown publisher" on an unsigned exe: More info → Run anyway.
+- **Windows** gets a real installer (`qinip-setup-x64.exe`, Inno Setup, built by CI) plus the portable zip. SmartScreen still shows "unknown publisher" on an unsigned installer: More info → Run anyway.
   Free ways out, in order of effort: the Microsoft Store (individual account is free since 2025;
   an MSIX package is signed by Microsoft and never warns), and SignPath Foundation's free
   open-source signing for the GitHub `.exe` once the project has some history.

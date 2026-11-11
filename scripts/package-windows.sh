@@ -1,11 +1,14 @@
 #!/usr/bin/env bash
-# Build a portable Windows zip for Qinip (run on Windows or in CI).
+# Build the Windows downloads for Qinip (run on Windows or in CI):
+# a portable zip, and the installer when Inno Setup is installed
+# (https://jrsoftware.org/isinfo.php; CI installs it with choco).
 #
 # Usage:
 #   bash scripts/package-windows.sh
 #
 # Output:
 #   target/release/qinip-windows-x64.zip
+#   target/release/qinip-setup-x64.exe   (if ISCC is available)
 
 set -euo pipefail
 
@@ -44,8 +47,20 @@ cp "$REPO_ROOT/README.md" "$STAGE/" 2>/dev/null || true
   fi
 )
 
+ISCC=""
+for candidate in "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" "$(command -v iscc 2>/dev/null || true)" "$(command -v ISCC 2>/dev/null || true)"; do
+  if [ -n "$candidate" ] && [ -x "$candidate" ]; then ISCC="$candidate"; break; fi
+done
+if [ -n "$ISCC" ]; then
+  VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
+  echo "==> Building installer (Inno Setup)..."
+  "$ISCC" "/DAppVersion=$VERSION" scripts/windows/qinip.iss
+else
+  echo "==> Inno Setup not found; skipping the installer (zip only)."
+fi
+
 echo ""
-echo "Done! Archive at:"
-echo "  $OUT_DIR/$ZIP_NAME"
+echo "Done!"
+echo "  Portable zip: $OUT_DIR/$ZIP_NAME"
+[ -n "$ISCC" ] && echo "  Installer:    $OUT_DIR/qinip-setup-x64.exe"
 echo ""
-echo "Unzip and run Qinip.exe"

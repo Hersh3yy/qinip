@@ -8,6 +8,7 @@ description = "Free MP3 pack audition player: playlist, coloured waveform, EQ, B
 license = "GPL-3.0-or-later"
 repository = "https://github.com/Hersh3yy/qinip"
 default-run = "qinip"
+build = "build.rs"
 
 [package.metadata.bundle]
 name = "Qinip"
@@ -41,6 +42,10 @@ symphonia = { version = "0.5.4", features = ["mp3"] }
 walkdir = "2.5.0"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 souvlaki = "0.8.3"
+
+[target.'cfg(windows)'.build-dependencies]
+# Embeds assets/qinip.ico and the product name into Qinip.exe (build.rs).
+winresource = "0.1"
 
 [target.'cfg(windows)'.dependencies]
 # The Win32 window handle for the media-keys integration (see src/media.rs).

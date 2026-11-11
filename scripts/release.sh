@@ -23,12 +23,19 @@ cd "$(dirname "$SCRIPT_DIR")"
 
 VERSION="${1:-}"
 DRY_RUN=false
-[ "${2:-}" = "--dry-run" ] && DRY_RUN=true
+ASSUME_YES=false
+for arg in "${@:2}"; do
+  case "$arg" in
+    --dry-run) DRY_RUN=true ;;
+    --yes) ASSUME_YES=true ;;   # no prompt before pushing (the Cut release workflow)
+    *) echo "unknown option: $arg" >&2; exit 1 ;;
+  esac
+done
 
 fail() { echo "✗ $*" >&2; exit 1; }
 ok() { echo "✓ $*"; }
 
-[ -n "$VERSION" ] || fail "Usage: $0 X.Y.Z [--dry-run]"
+[ -n "$VERSION" ] || fail "Usage: $0 X.Y.Z [--dry-run] [--yes]"
 [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || fail "\"$VERSION\" is not X.Y.Z"
 TAG="v$VERSION"
 
@@ -92,7 +99,11 @@ ok "committed and tagged $TAG"
 
 # 6. Publish
 echo ""
-read -r -p "Push master and $TAG now? This starts the public release build. [y/N] " answer
+if $ASSUME_YES; then
+  answer=y
+else
+  read -r -p "Push master and $TAG now? This starts the public release build. [y/N] " answer
+fi
 if [ "$answer" = "y" ] || [ "$answer" = "Y" ]; then
   git push origin master "$TAG"
   ok "pushed. Watch it: https://github.com/Hersh3yy/qinip/actions"
