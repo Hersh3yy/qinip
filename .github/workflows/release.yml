@@ -29,7 +29,7 @@ jobs:
   macos:
     name: macOS .app
     needs: verify
-    runs-on: macos-14
+    runs-on: macos-latest
     env:
       MACOS_CERT_P12: ${{ secrets.MACOS_CERT_P12 }}
       APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
