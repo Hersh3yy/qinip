@@ -47,6 +47,8 @@ cargo run --release
 
 ### Branches and releases (the rules)
 
+Plain-words version, with the why and the launch checklist: `docs/releasing.md`.
+
 - `master` is always releasable. Work happens on a branch (`feat/...`, `fix/...`); merge into `master` only when it's tested in the bundle.
 - Every user-visible change adds a line under `## [Unreleased]` in `CHANGELOG.md`, in the same commit.
 - CI (`.github/workflows/ci.yml`) runs tests + strict clippy on every push to `master` and every pull request.
