@@ -123,13 +123,16 @@ jobs:
       - name: Install Inno Setup
         run: choco install innosetup -y --no-progress
 
+      # PowerShell on purpose: Git Bash rewrites "/DAppVersion=..." into a
+      # Windows path, and ISCC then sees two script names.
       - name: Build installer
-        shell: bash
+        shell: pwsh
         run: |
-          VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
-          "/c/Program Files (x86)/Inno Setup 6/ISCC.exe" "/DAppVersion=$VERSION" scripts/windows/qinip.iss
-          cp target/release/qinip-setup-x64.exe .
-          ls -la qinip-setup-x64.exe
+          $version = (Select-String -Path Cargo.toml -Pattern '^version = "(.*)"' | Select-Object -First 1).Matches.Groups[1].Value
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" "/DAppVersion=$version" scripts\windows\qinip.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item target\release\qinip-setup-x64.exe .
+          Get-Item qinip-setup-x64.exe | Format-List Name, Length
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4

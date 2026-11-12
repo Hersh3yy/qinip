@@ -54,7 +54,8 @@ done
 if [ -n "$ISCC" ]; then
   VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)"
   echo "==> Building installer (Inno Setup)..."
-  "$ISCC" "/DAppVersion=$VERSION" scripts/windows/qinip.iss
+  # MSYS_NO_PATHCONV: Git Bash must not rewrite "/D..." into a drive path.
+  MSYS_NO_PATHCONV=1 "$ISCC" "/DAppVersion=$VERSION" scripts/windows/qinip.iss
 else
   echo "==> Inno Setup not found; skipping the installer (zip only)."
 fi
