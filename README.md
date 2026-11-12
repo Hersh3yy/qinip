@@ -31,24 +31,45 @@ Same idea here: load a bunch of songs, crack one open, see the waveform inside. 
 
 ---
 
-## Download
+## Download and install
 
-Get the latest release from **[GitHub Releases](https://github.com/Hersh3yy/qinip/releases/latest)**:
+Get the latest version from **[GitHub Releases](https://github.com/Hersh3yy/qinip/releases/latest)**. Pick your file:
 
-| Platform | File | What to do |
-|----------|------|------------|
-| **macOS** (Apple Silicon) | `qinip-macos-arm64.dmg` | Open it → drag Qinip to Applications |
-| **Windows** (x64) | `qinip-setup-x64.exe` | Run it → Qinip lands in the Start menu (uninstall from Settings → Apps). Portable version: `qinip-windows-x64.zip` |
+| Platform | File |
+|----------|------|
+| **macOS** (Apple Silicon, macOS 11 or newer) | `qinip-macos-arm64.dmg` |
+| **Windows** (64-bit, Windows 10 or newer) | `qinip-setup-x64.exe` (installer) or `qinip-windows-x64.zip` (portable) |
 
-**macOS, first launch only.** Qinip is not notarized by Apple (that costs 99 USD a year), so macOS blocks the first launch:
+Qinip is free and not signed with a paid developer certificate, so both systems show a warning the first time. That is them saying "we don't know this developer", not "this is dangerous". The steps below get you past it once.
 
-1. Double-click Qinip. macOS says it can't check it. Click **Done**.
-2. Open **System Settings → Privacy & Security**, scroll down, click **Open Anyway** next to Qinip.
-3. Confirm with your password or Touch ID, then **Open**. From then on it opens normally.
+### macOS
 
-**Windows:** SmartScreen may warn on an unsigned app: **More info → Run anyway**.
+1. Open the `.dmg` and drag **Qinip** onto the **Applications** folder shown next to it.
+2. Open Qinip from Applications. macOS says it can't check it for malicious software. Click **Done**.
+3. Open **System Settings → Privacy & Security**, scroll down to the line *"Qinip" was blocked*, click **Open Anyway**, confirm with your password or Touch ID, then **Open**.
 
-Each release lists `SHA256SUMS.txt`, so you can check a download is untouched (`shasum -a 256 qinip-macos-arm64.dmg`).
+From then on Qinip opens normally. **Update:** drag the new version over the old one. **Uninstall:** drag Qinip from Applications to the Trash.
+
+### Windows (installer)
+
+1. Download `qinip-setup-x64.exe`. Your browser may say the file "isn't commonly downloaded" and offer to delete it: choose **Keep** (in Edge: the `…` menu on the download → **Keep** → **Keep anyway**).
+2. Double-click the file. SmartScreen shows *Windows protected your PC*. Click **More info**, then **Run anyway**.
+3. The installer asks where to put Qinip (the default is fine; it installs for your user only, no administrator password needed) and whether you want a desktop icon. Click **Install**, then **Finish**. Qinip starts.
+
+Afterwards Qinip is in the **Start menu** like any other app. **Update:** run the new installer; it replaces the old version in place and keeps your settings. **Uninstall:** **Settings → Apps → Installed apps → Qinip → Uninstall**.
+
+### Windows (portable)
+
+Unzip `qinip-windows-x64.zip` anywhere (a USB stick works) and run `Qinip.exe`. Same SmartScreen step as above. Nothing is installed; delete the folder to remove it.
+
+### Checking a download
+
+Every release lists `SHA256SUMS.txt`. The number next to your file must match the one your computer calculates:
+
+- macOS: `shasum -a 256 ~/Downloads/qinip-macos-arm64.dmg` in Terminal.
+- Windows: `Get-FileHash .\Downloads\qinip-setup-x64.exe` in PowerShell.
+
+Qinip makes no network connections, needs no account, and only reads your music files unless you tick the box that lets it write BPM/key tags.
 
 ---
 

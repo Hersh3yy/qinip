@@ -175,6 +175,7 @@ jobs:
             echo "  open **System Settings → Privacy & Security**, scroll down, click **Open Anyway** next to Qinip, confirm. Only needed once."
             echo "- **Windows (x64):** \`qinip-setup-x64.exe\`. Run it; it installs Qinip, adds it to the Start menu and to Settings → Apps for uninstalling. If SmartScreen warns: **More info → Run anyway**. Prefer no installer? \`qinip-windows-x64.zip\` is the portable version."
             echo "- \`SHA256SUMS.txt\` lets you check a download is untouched."
+            echo "- Step-by-step install and uninstall for both systems: https://github.com/Hersh3yy/qinip#download-and-install"
             echo ""
             echo "## What's new"
             cat changes.md
