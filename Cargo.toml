@@ -1,6 +1,6 @@
 [package]
 name = "qinip"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2024"
 description = "Free MP3 pack audition player: playlist, coloured waveform, EQ, BPM/key analysis."
 # GPL-3.0-or-later: chosen when aubio (GPL) was a dependency; aubio is gone since 1.1.0,

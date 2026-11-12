@@ -6,6 +6,8 @@ Work in progress goes under **Unreleased**. `scripts/release.sh` turns that sect
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-12
+
 ### Added
 - Send songs to rekordbox: right-click → Add to Rekordbox playlist. Qinip writes a rekordbox XML file that rekordbox 6/7 can import; a Rekordbox window walks you through the one-time setup.
 - Shuffle and Repeat (off, all, one) buttons next to the transport controls.
@@ -49,5 +51,6 @@ Work in progress goes under **Unreleased**. `scripts/release.sh` turns that sect
 
 First public release (then called DJ Player): playlist with sortable columns, coloured 4-band waveform, EQ knobs, background BPM/key/Camelot analysis, gapless autoplay, beat loops, and right-click file actions.
 
-[Unreleased]: https://github.com/Hersh3yy/qinip/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/Hersh3yy/qinip/compare/v1.1.0...HEAD
+[1.1.0]: https://github.com/Hersh3yy/qinip/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/Hersh3yy/qinip/releases/tag/v1.0.0
