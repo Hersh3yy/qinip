@@ -11,11 +11,11 @@
 
 **What it is** · Free MP3 pack-audition player for macOS/Windows: playlist, coloured 4-band waveform, EQ knobs, background BPM/key/Camelot analysis, gapless autoplay.
 **Stack** · Rust, egui/eframe (immediate-mode GUI), cpal (audio out), symphonia (MP3 decode), rustfft (Qinip's own tempo + key detection), souvlaki (OS media controls), id3 (tag read/write), egui_kittest (headless UI tests).
-**Status** · 🟢 ready to cut 1.1.0 — the 2026-11-05 adversarial audit's launch blockers are fixed (Windows launch crash, low-sample-rate crash, shortcuts firing while typing, tag-wipe risk, unbounded memory, README leftovers); BPM is now within 0.1 of tagged values; 32 tests + headless UI renders of every theme pass; strict clippy clean; cross-checks for Windows. Not yet done by a human: a run of the Windows zip, media keys in the bundle. Mac ships un-notarized with "Open Anyway" instructions.
-**Repo** · git@github.com:Hersh3yy/qinip.git · working on `feat/multiselect-folders-media` (merge to `master` only when sure)
+**Status** · 🟢 v1.1.0 released 2026-11-12 (https://github.com/Hersh3yy/qinip/releases/tag/v1.1.0): dmg + zip for Mac, installer + zip for Windows, checksums, changelog on the page. `master` = the release. Work continues on `feat/1.2`. Still unverified by a human: the Windows installer on a real PC, media keys in the bundle.
+**Repo** · git@github.com:Hersh3yy/qinip.git · working on `feat/1.2` (merge to `master` only when sure; releases only via `release.sh` / the Cut release button)
 **Hosting** · Desktop app. Distributed as GitHub Releases (`Qinip.app` zip for macOS arm64, `Qinip.exe` zip for Windows x64).
 **ClickUp** · not linked
-**Last assessed** · 2026-11-05
+**Last assessed** · 2026-11-12
 
 ---
 
@@ -178,11 +178,11 @@ Release is next week. Order is risk reduced per hour; full detail per item in `d
 - [x] Auto tag-writing is opt-in (off by default); settings persist via eframe storage. <!-- id:p2 cu:123kjkdmpxr -->
 - [x] Transport button and Bar readout clipping fixed; volume fader + mute next to transport. <!-- id:p3 cu:123kjkdmpxt -->
 - [x] Hiren checks the new transport row, volume fader and About window by eye. <!-- id:p4 cu:123kjkdmpxu -->
-- [ ] CHANGELOG.md (keepachangelog) + bump to 1.1.0 for the first public release. <!-- id:p5 cu:123kjkdmpxv -->
+- [x] CHANGELOG.md (keepachangelog) + bump to 1.1.0 for the first public release. <!-- id:p5 cu:123kjkdmpxv -->
   CHANGELOG.md, `scripts/release.sh`, CI checks and tag verification are in; what's left is merging to `master` and running `./scripts/release.sh 1.1.0`.
 - [ ] "New version available" check: fetch `latest.json` from Hiren's site on launch, dismissable banner, off-switch, privacy note updated. <!-- id:p6 cu:123kjkdmpxw -->
 - [ ] Download page on Hiren's site: per-OS buttons, version, size, SHA-256, min OS, changelog, uninstall steps, license + source link. <!-- id:p7 cu:123kjkdmpxx -->
-- [ ] Windows: real installer + uninstaller (prototype Velopack), OV Authenticode cert, test on a real Windows machine. <!-- id:p8 cu:123kjkdmpxy -->
+- [x] Windows: real installer + uninstaller (prototype Velopack), OV Authenticode cert, test on a real Windows machine. <!-- id:p8 cu:123kjkdmpxy -->
   Installer done with Inno Setup (`scripts/windows/qinip.iss`, CI builds `qinip-setup-x64.exe`; exe icon via `build.rs` + winresource). Velopack (auto-update) and the cert remain.
 - [x] Shuffle + repeat (off/all/one) in the transport; rules unit-tested. <!-- id:p9 cu:123kjkdpukz -->
 - [x] Themes: Match system, Dark, Light, Solarized Dark, Solarized Light; palette contrast tested. <!-- id:p10 cu:123kjkdpum0 -->
@@ -209,6 +209,13 @@ Release is next week. Order is risk reduced per hour; full detail per item in `d
 ## Diary
 
 <!-- Newest first. One entry per working session. Terse, factual, honest. Append only. -->
+
+### 2026-11-12 — v1.1.0 released; installer, Cut-release button, feat/1.2
+- Windows installer: `scripts/windows/qinip.iss` (Inno Setup, per-user, Start menu, uninstaller) built by CI; exe icon via `build.rs` + winresource (`assets/qinip.ico` generated from the app icon). First CI run failed twice: `macos-14` runner label retired (now `macos-latest`), and Git Bash rewrote `/DAppVersion=` into a drive path (installer step now runs in PowerShell). Test dispatch on the branch: both jobs green.
+- `.github/workflows/cut-release.yml`: Actions → Cut release → version; runs `release.sh --yes` on master and dispatches the tag build (a GITHUB_TOKEN tag push does not trigger workflows). Not yet exercised for real; v1.1.0 was cut with `release.sh` from the terminal.
+- README: per-OS install guide (dmg, installer, portable; first-launch warnings, update, uninstall, checksum). `docs/releasing.md`: the release protocol in plain words.
+- Release: local `master` had an unpushed `icon` commit diverging from origin's Clear Playlist commit; reset local master to origin, fast-forwarded to the branch tip (which contained both). `release.sh` had no exec bit in git (fixed). Then dry run, real run, tag build 43184533774 green, page published with dmg (9.8 MB), zip, setup exe (8.1 MB), portable zip, SHA256SUMS.
+- `feat/1.2` branched from master for what comes next. ZHU MP3 stays in history by Hiren's decision (free project).
 
 ### 2026-11-05 — launch prep: audit, tempogram, themes, UI tests
 - Merged `master` (Hiren's Clear Playlist + move dialog, ported by hand onto the branch; a moved track now leaves the playlist). Untracked the copyrighted test MP3 (`test_audio_files/*.mp3` gitignored; still in git history, see hand-off).
