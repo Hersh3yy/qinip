@@ -11,11 +11,11 @@
 
 **What it is** · Free MP3 pack-audition player for macOS/Windows: playlist, coloured 4-band waveform, EQ knobs, background BPM/key/Camelot analysis, gapless autoplay.
 **Stack** · Rust, egui/eframe (immediate-mode GUI), cpal (audio out), symphonia (MP3 decode), rustfft (Qinip's own tempo + key detection), souvlaki (OS media controls), id3 (tag read/write), egui_kittest (headless UI tests).
-**Status** · 🟢 v1.1.0 released 2026-11-12 (https://github.com/Hersh3yy/qinip/releases/tag/v1.1.0): dmg + zip for Mac, installer + zip for Windows, checksums, changelog on the page. `master` = the release. Work continues on `feat/1.2`. Still unverified by a human: the Windows installer on a real PC, media keys in the bundle.
+**Status** · 🟡 v1.1.0 is built and published (dmg + zip, installer + zip, checksums, changelog on the page), **but the GitHub repo is still private, so nobody can download it**: every release link 404s for the public. One decision unblocks the launch: make the repo public (history scanned clean apart from the ZHU test MP3). `master` = the release, work continues on `feat/1.2`. Still unverified by a human: the Windows installer on a real PC, media keys in the bundle.
 **Repo** · git@github.com:Hersh3yy/qinip.git · working on `feat/1.2` (merge to `master` only when sure; releases only via `release.sh` / the Cut release button)
 **Hosting** · Desktop app. Distributed as GitHub Releases (`Qinip.app` zip for macOS arm64, `Qinip.exe` zip for Windows x64).
 **ClickUp** · not linked
-**Last assessed** · 2026-11-12
+**Last assessed** · 2026-11-14
 
 ---
 
@@ -29,6 +29,14 @@ cargo run --release
 - See the UI without a window: `QINIP_UI_RENDER_DIR=/tmp/qinip-ui cargo test --release --lib ui_tests` writes a PNG per screen and theme (`src/ui_tests.rs`, egui_kittest; `QINIP_UI_FOLDER=<folder>` loads real tracks).
 - Needs Rust 1.95+ (egui 0.36). `cargo run` is a bare binary, not the `.app`: media keys and the Dock icon behave differently; test those in the bundle (`bash scripts/package-macos.sh`).
 - Regenerate third-party licenses after dependency changes: `cargo about generate -c scripts/licenses/about.toml scripts/licenses/about.hbs > assets/THIRD_PARTY_LICENSES.html` (`cargo install cargo-about --locked --features cli` once).
+
+### Picking up on another laptop
+
+```bash
+git clone git@github.com:Hersh3yy/qinip.git && cd qinip && git checkout feat/1.2 && rustup update stable && cargo run --release
+```
+
+Already cloned: `git fetch && git checkout feat/1.2 && git pull`. Read this file's Status, Issues and the newest Diary entry first; the first open roadmap item is the one to do.
 
 ### Developer setup, Mac
 
@@ -65,6 +73,8 @@ v1.0.0 is the last public release (2026-07-21). Everything since is on `feat/mul
 
 | Sev | Issue | Where |
 |---|---|---|
+| release-blocker | The repository is **private**, so the v1.1.0 release page and `releases/latest/download/...` links return 404 to everyone but Hiren. Options: make it public now; scrub the ZHU MP3 from history first (filter-repo + force push + re-tag), then public; or stay private and host the files on itch.io / the website. Hiren's call; nothing else is in the way. | GitHub settings, `README.md` links, `docs/launch/instagram-post.md` |
+| warning | The **Cut release** button (`cut-release.yml`) has never run. v1.1.0 was cut from the terminal. Try it once with "Only check" before relying on it. | `.github/workflows/cut-release.yml` |
 | serious | No human has run the Windows build. It cross-compiles and the launch crash (souvlaki needing an HWND) is fixed by passing the window handle, but media keys and the whole UI are untested there. | `src/app.rs` (`init_system_media`), CI Windows job |
 | serious | Mac builds are ad-hoc signed: users get the "Open Anyway" dance once. Needs the paid Apple Developer account or a sponsor. | `scripts/package-macos.sh` |
 | warning | `playing_track` / `confirm_delete` are raw indices hand-shifted on remove and cleared on sort; a `TrackId` would delete that code. | `src/app.rs` (`remove_from_playlist`) |
@@ -157,7 +167,11 @@ sequenceDiagram
 
 ## Roadmap — near future
 
-Release is next week. Order is risk reduced per hour; full detail per item in `docs/release-and-code-quality.md`.
+v1.1.0 is published but invisible (private repo). First item unblocks everything else.
+
+- [ ] Decide and do: make the repo public (or scrub the ZHU MP3 first, or host the downloads elsewhere). Then re-test the four `releases/latest/download/` links in a private browser window; they must redirect, not 404. <!-- id:p14 -->
+- [ ] Test the Cut release button once: Actions → Cut release → version `1.1.1` → tick "Only check". It must end green without committing anything. <!-- id:p15 -->
+- [ ] Post: `docs/launch/instagram-post.md`, after p14 and after downloading the dmg yourself in Safari. <!-- id:p16 -->
 
 - [ ] Verify system play/pause in the packaged `Qinip.app` (media keys, Control Center, Bluetooth headphone button). If it fails there too, dig into souvlaki registration. <!-- id:n1 cu:123kjkdmpx9 -->
 - [x] Multi-select + batch delete (Shift/Cmd click, Cmd+A, Esc, Backspace removes the set high→low). <!-- id:n2 cu:123kjkdmpxa -->
@@ -209,6 +223,12 @@ Release is next week. Order is risk reduced per hour; full detail per item in `d
 ## Diary
 
 <!-- Newest first. One entry per working session. Terse, factual, honest. Append only. -->
+
+### 2026-11-14 — hand-off to the laptop; the repo is private
+- After the 2026-11-12 release: the public links 404. Cause found: the GitHub repository is **private** (it always was; the README and the IG post assumed public). The release itself is fine (`v1.1.0` marked latest, 5 assets, notes render). Full history scanned for secrets, private paths and emails: clean; only the ZHU MP3 (9.8 MB, commit 0d656df) is in history. Hiren interrupted the go-public question; it is now roadmap p14, his decision.
+- Branch hygiene: `feat/multiselect-folders-media` is fully merged into `master` (fast-forward) and deleted locally and on origin. One working branch: `feat/1.2`. No unpushed commits anywhere.
+- No ClickUp sync (no `CLICKUP_API_KEY` in this session); new ids p14–p16 need one run.
+- Not done: nothing in the app changed this session.
 
 ### 2026-11-12 — v1.1.0 released; installer, Cut-release button, feat/1.2
 - Windows installer: `scripts/windows/qinip.iss` (Inno Setup, per-user, Start menu, uninstaller) built by CI; exe icon via `build.rs` + winresource (`assets/qinip.ico` generated from the app icon). First CI run failed twice: `macos-14` runner label retired (now `macos-latest`), and Git Bash rewrote `/DAppVersion=` into a drive path (installer step now runs in PowerShell). Test dispatch on the branch: both jobs green.
