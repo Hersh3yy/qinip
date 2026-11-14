@@ -169,9 +169,9 @@ sequenceDiagram
 
 v1.1.0 is published but invisible (private repo). First item unblocks everything else.
 
-- [ ] Decide and do: make the repo public (or scrub the ZHU MP3 first, or host the downloads elsewhere). Then re-test the four `releases/latest/download/` links in a private browser window; they must redirect, not 404. <!-- id:p14 -->
-- [ ] Test the Cut release button once: Actions → Cut release → version `1.1.1` → tick "Only check". It must end green without committing anything. <!-- id:p15 -->
-- [ ] Post: `docs/launch/instagram-post.md`, after p14 and after downloading the dmg yourself in Safari. <!-- id:p16 -->
+- [ ] Decide and do: make the repo public (or scrub the ZHU MP3 first, or host the downloads elsewhere). Then re-test the four `releases/latest/download/` links in a private browser window; they must redirect, not 404. <!-- id:p14 cu:123kjkdqc95 -->
+- [ ] Test the Cut release button once: Actions → Cut release → version `1.1.1` → tick "Only check". It must end green without committing anything. <!-- id:p15 cu:123kjkdqc96 -->
+- [ ] Post: `docs/launch/instagram-post.md`, after p14 and after downloading the dmg yourself in Safari. <!-- id:p16 cu:123kjkdqc97 -->
 
 - [ ] Verify system play/pause in the packaged `Qinip.app` (media keys, Control Center, Bluetooth headphone button). If it fails there too, dig into souvlaki registration. <!-- id:n1 cu:123kjkdmpx9 -->
 - [x] Multi-select + batch delete (Shift/Cmd click, Cmd+A, Esc, Backspace removes the set high→low). <!-- id:n2 cu:123kjkdmpxa -->
@@ -186,8 +186,8 @@ v1.1.0 is published but invisible (private repo). First item unblocks everything
 - [x] `move_to_folder` uses `file_ops::move_file` (copy-then-remove fallback across volumes, tested). <!-- id:r4 cu:123kjkdmpxm -->
 - [ ] `TrackId` identity for `playing_track` / `confirm_delete`; delete the index-shifting code. <!-- id:r6 cu:123kjkdmpxn -->
 - [ ] Unit tests for `remove_from_playlist`, `compare_tracks`, `resample_interleaved` (tempo, keys, tags, EQ and the UI now have tests). <!-- id:r7 cu:123kjkdmpxp -->
-- [ ] A human runs the Windows 1.1.0 zip: launch, play, media keys, themes. Until then the download page calls Windows "beta". <!-- id:p12 -->
-- [ ] Decide the licence: aubio (the GPL reason) is gone, so MIT/Apache is possible. Hiren's call; GPL stays until then. <!-- id:p13 -->
+- [ ] A human runs the Windows 1.1.0 zip: launch, play, media keys, themes. Until then the download page calls Windows "beta". <!-- id:p12 cu:123kjkdqc98 -->
+- [ ] Decide the licence: aubio (the GPL reason) is gone, so MIT/Apache is possible. Hiren's call; GPL stays until then. <!-- id:p13 cu:123kjkdqc99 -->
 - [x] GPL-3.0-or-later LICENSE, About window, `THIRD_PARTY_LICENSES.html` via cargo-about, shipped in the bundle and Windows zip. <!-- id:p1 cu:123kjkdmpxq -->
 - [x] Auto tag-writing is opt-in (off by default); settings persist via eframe storage. <!-- id:p2 cu:123kjkdmpxr -->
 - [x] Transport button and Bar readout clipping fixed; volume fader + mute next to transport. <!-- id:p3 cu:123kjkdmpxt -->
