@@ -6,3 +6,5 @@
 
 # Local test audio only; never ship copyrighted tracks in the repo.
 test_audio_files/*.mp3
+# The Rune spike builds into its own folder (separate workspace).
+rune-ui/target/

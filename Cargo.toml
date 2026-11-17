@@ -59,3 +59,9 @@ objc2-app-kit = { version = "0.3.2", features = ["NSImage"] }
 [dev-dependencies]
 # Headless UI tests: drives the real app without a window (src/ui_tests.rs).
 egui_kittest = { version = "0.36", features = ["eframe", "wgpu", "snapshot"] }
+
+# `rune-ui/` (the Rune spike, branch feat/2.0-rune) is its own workspace with its own
+# Cargo.lock and [patch] table, so nothing it needs (Rune's winit/wgpu forks) touches this
+# package, its lockfile, or the release builds. See rune-ui/README.md.
+[workspace]
+exclude = ["rune-ui"]

@@ -172,7 +172,7 @@ v1.1.0 is published but invisible (private repo). First item unblocks everything
 - [ ] Decide and do: make the repo public (or scrub the ZHU MP3 first, or host the downloads elsewhere). Then re-test the four `releases/latest/download/` links in a private browser window; they must redirect, not 404. <!-- id:p14 cu:123kjkdqc95 -->
 - [ ] Test the Cut release button once: Actions → Cut release → version `1.1.1` → tick "Only check". It must end green without committing anything. <!-- id:p15 cu:123kjkdqc96 -->
 - [ ] Post: `docs/launch/instagram-post.md`, after p14 and after downloading the dmg yourself in Safari. <!-- id:p16 cu:123kjkdqc97 -->
-- [ ] 2.0 spike: Qinip's screen rebuilt on Rune (github.com/anomalyco/rune, pinned dev rev 3d037b4) as a second crate `rune-ui/` (binary `qinip-rune`) that reuses the whole `qinip` library; the egui app stays the shipped one. Compare by eye and by feel, then decide: continue toward 2.0 on Rune, or stay on egui. <!-- id:p17 -->
+- [x] 2.0 spike: Qinip's screen rebuilt on Rune as `rune-ui/` (own workspace, binary `qinip-rune`, pinned dev rev 3d037b4). Parts a–e work, verified headless. Verdict: stay on egui for shipping; Rune is the 2.0 candidate once it settles (see `rune-ui/README.md`). <!-- id:p17 -->
 - [ ] 1.2 / 1.3 features: collected by Hiren while using 1.1.0 this week; add here as they come. <!-- id:p18 -->
 
 - [ ] Verify system play/pause in the packaged `Qinip.app` (media keys, Control Center, Bluetooth headphone button). If it fails there too, dig into souvlaki registration. <!-- id:n1 cu:123kjkdmpx9 -->
@@ -218,6 +218,7 @@ v1.1.0 is published but invisible (private repo). First item unblocks everything
 - [ ] Bar counter / metronome on the beat grid: period and phase exist now (`bpm.rs`), the tempo light and loops use them; what's missing is the downbeat (which beat is 1), e.g. the phase among the four whose beats carry the most Low-band energy, plus a "set beat 1 here" nudge. Then a 1-2-3-4 readout and a click track. <!-- id:f7 cu:123kjkdmpy8 -->
   Plan: (1) keep aubio's per-beat times during analysis, not just the BPM; (2) refine BPM with a line fit through them, grid phase = circular mean of beat-time mod period; (3) guess the downbeat as the phase whose beats carry the most Low-band energy (kick on the 1); (4) a "set beat 1 here" nudge for when the guess is wrong, like Rekordbox's grid adjust; (5) counter and loop buttons snap to the grid; (6) metronome = a click mixed in the audio callback at grid times. About two sessions.
 - [x] Rekordbox bridge via rekordbox XML, the import format Pioneer documents and Rekordbox 6/7 read. Qinip keeps its own playlists and writes them to one XML file; right-click → "Add to Rekordbox playlist ▸ <name> / New…". One-time Rekordbox setup (Preferences > Advanced > Database > rekordbox xml; show "rekordbox xml" in the tree), then refresh + Import in Rekordbox. Not writing Rekordbox's own `master.db` (encrypted, undocumented, can corrupt the library). Check against Hiren's Rekordbox version first. <!-- id:f9 cu:123kjkdpum2 -->
+- [ ] Revisit Rune for 2.0: re-run the `rune-ui/` spike against a newer rev (or the first crates.io release); go if the weekly breaking changes have stopped and the kit has sliders/knobs. Porting list is in `rune-ui/README.md` ("Not ported"). <!-- id:f10 -->
 - [ ] Velopack auto-update (replaces the p6 banner with in-app updates). <!-- id:f8 cu:123kjkdmpy9 -->
 
 ---
@@ -228,7 +229,9 @@ v1.1.0 is published but invisible (private repo). First item unblocks everything
 
 ### 2026-11-17 — branch for 2.0 on Rune
 - `feat/2.0-rune` branched from `feat/1.2`, which is deleted (local + origin); one working branch. Released version stays 1.1.0.
-- Rune spike started as a separate crate (`rune-ui/`, workspace member) so the egui app and the release scripts keep building unchanged; pinned Rune `dev` rev `3d037b49` (2026-11-17). Toolchain updated toward 1.100 (Rune wants 1.99.1+).
+- Rune spike built by an agent in one session: `rune-ui/` with top bar, virtualised table, four-band waveform canvas, transport, tempo light, volume, file drop, theme menu; every part verified with Rune's headless `--snap`/`--tree`/`--script` (file dialog, drop and menu picks scripted, which egui_kittest cannot do). Two bugs found only by looking at the PNGs: Rune colours are linear light (palette needed sRGB decoding) and a flex table collapses to 0 pt without `grow + min_h(0)`. Clean release build 174 s / 296 crates; warm 19 s; binary 31.9 MB vs 19.8 MB.
+- The agent had wired the spike as a workspace member with a root `[patch.crates-io]` table, which silently swapped the shipped egui app's winit for Rune's fork. Undone: root `Cargo.toml`/`Cargo.lock` restored, `rune-ui/` made its own workspace (own lock, own patch table), root excludes it. Toolchain now 1.100.
+- Verdict recorded in `rune-ui/README.md`: stay on egui; revisit (f10) when Rune is on crates.io or its churn stops.
 - ClickUp: every linked koala project now has task ids for all items; `scripts/clickup-sync-all.sh` in the project-map skill syncs all eight; the token comes from `hiren-ninja/.env`.
 
 ### 2026-11-14 — hand-off to the laptop; the repo is private
