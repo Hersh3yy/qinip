@@ -12,10 +12,10 @@
 **What it is** · Free MP3 pack-audition player for macOS/Windows: playlist, coloured 4-band waveform, EQ knobs, background BPM/key/Camelot analysis, gapless autoplay.
 **Stack** · Rust, egui/eframe (immediate-mode GUI), cpal (audio out), symphonia (MP3 decode), rustfft (Qinip's own tempo + key detection), souvlaki (OS media controls), id3 (tag read/write), egui_kittest (headless UI tests).
 **Status** · 🟡 v1.1.0 is built and published (dmg + zip, installer + zip, checksums, changelog on the page), **but the GitHub repo is still private, so nobody can download it**: every release link 404s for the public. One decision unblocks the launch: make the repo public (history scanned clean apart from the ZHU test MP3). `master` = the release, work continues on `feat/1.2`. Still unverified by a human: the Windows installer on a real PC, media keys in the bundle.
-**Repo** · git@github.com:Hersh3yy/qinip.git · working on `feat/1.2` (merge to `master` only when sure; releases only via `release.sh` / the Cut release button)
+**Repo** · git@github.com:Hersh3yy/qinip.git · working on `feat/2.0-rune` (merge to `master` only when sure; releases only via `release.sh` / the Cut release button). Released: 1.1.0; `Cargo.toml` stays 1.1.0 until the next cut.
 **Hosting** · Desktop app. Distributed as GitHub Releases (`Qinip.app` zip for macOS arm64, `Qinip.exe` zip for Windows x64).
 **ClickUp** · not linked
-**Last assessed** · 2026-11-14
+**Last assessed** · 2026-11-17
 
 ---
 
@@ -172,6 +172,8 @@ v1.1.0 is published but invisible (private repo). First item unblocks everything
 - [ ] Decide and do: make the repo public (or scrub the ZHU MP3 first, or host the downloads elsewhere). Then re-test the four `releases/latest/download/` links in a private browser window; they must redirect, not 404. <!-- id:p14 cu:123kjkdqc95 -->
 - [ ] Test the Cut release button once: Actions → Cut release → version `1.1.1` → tick "Only check". It must end green without committing anything. <!-- id:p15 cu:123kjkdqc96 -->
 - [ ] Post: `docs/launch/instagram-post.md`, after p14 and after downloading the dmg yourself in Safari. <!-- id:p16 cu:123kjkdqc97 -->
+- [ ] 2.0 spike: Qinip's screen rebuilt on Rune (github.com/anomalyco/rune, pinned dev rev 3d037b4) as a second crate `rune-ui/` (binary `qinip-rune`) that reuses the whole `qinip` library; the egui app stays the shipped one. Compare by eye and by feel, then decide: continue toward 2.0 on Rune, or stay on egui. <!-- id:p17 -->
+- [ ] 1.2 / 1.3 features: collected by Hiren while using 1.1.0 this week; add here as they come. <!-- id:p18 -->
 
 - [ ] Verify system play/pause in the packaged `Qinip.app` (media keys, Control Center, Bluetooth headphone button). If it fails there too, dig into souvlaki registration. <!-- id:n1 cu:123kjkdmpx9 -->
 - [x] Multi-select + batch delete (Shift/Cmd click, Cmd+A, Esc, Backspace removes the set high→low). <!-- id:n2 cu:123kjkdmpxa -->
@@ -223,6 +225,11 @@ v1.1.0 is published but invisible (private repo). First item unblocks everything
 ## Diary
 
 <!-- Newest first. One entry per working session. Terse, factual, honest. Append only. -->
+
+### 2026-11-17 — branch for 2.0 on Rune
+- `feat/2.0-rune` branched from `feat/1.2`, which is deleted (local + origin); one working branch. Released version stays 1.1.0.
+- Rune spike started as a separate crate (`rune-ui/`, workspace member) so the egui app and the release scripts keep building unchanged; pinned Rune `dev` rev `3d037b49` (2026-11-17). Toolchain updated toward 1.100 (Rune wants 1.99.1+).
+- ClickUp: every linked koala project now has task ids for all items; `scripts/clickup-sync-all.sh` in the project-map skill syncs all eight; the token comes from `hiren-ninja/.env`.
 
 ### 2026-11-14 — hand-off to the laptop; the repo is private
 - After the 2026-11-12 release: the public links 404. Cause found: the GitHub repository is **private** (it always was; the README and the IG post assumed public). The release itself is fine (`v1.1.0` marked latest, 5 assets, notes render). Full history scanned for secrets, private paths and emails: clean; only the ZHU MP3 (9.8 MB, commit 0d656df) is in history. Hiren interrupted the go-public question; it is now roadmap p14, his decision.
