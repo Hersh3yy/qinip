@@ -9,8 +9,8 @@ use qinip::playlist::{AnalysisState, TrackEntry};
 use qinip::theme::ThemeChoice;
 use qinip::transport::beat_phase;
 use rune::{
-    Align, Color, Cursor, Cx, Drag, El, FileDialogOptions, LineCap, Phase, PopupMenu, Shape, TextStyle, Tx,
-    canvas, col, el, row, spacer, text,
+    Align, Color, Cursor, Cx, Drag, El, FileDialogOptions, LineCap, Phase, PointerPress, PopupItem, PopupMenu,
+    Shape, TextStyle, Tx, canvas, col, el, row, spacer, text,
 };
 use rune_kit::{Button, ButtonVariant, Cell, Table, TableColumn, TableState};
 
@@ -24,14 +24,18 @@ const WAVE_H: f32 = 110.0;
 /// Tabular digits, so the clock does not wobble as it counts.
 const MONO: TextStyle = TextStyle::new(12.0, 500.0).features("'tnum' 1");
 
-pub fn view(s: &App, _cx: &mut Cx<App>) -> El {
+pub fn view(s: &App, cx: &mut Cx<App>) -> El {
     let ink = s.ink;
+    // On macOS the window has a transparent title bar with our content under it, so the
+    // top bar must start to the right of the traffic lights (0 on Windows/Linux and in
+    // full screen).
+    let leading = cx.chrome_insets().leading;
     col()
         .key("root")
         .w_full()
         .h_full()
         .fill(ink.panel)
-        .child(top_bar(s))
+        .child(top_bar(s, leading))
         .child(playlist(s))
         .child(waveform(s))
         .child(bottom_bar(s))
@@ -42,7 +46,7 @@ pub fn view(s: &App, _cx: &mut Cx<App>) -> El {
 
 // ---- Top bar ---------------------------------------------------------------------------------
 
-fn top_bar(s: &App) -> El {
+fn top_bar(s: &App, leading_inset: f32) -> El {
     let ink = s.ink;
     let k = &s.kit;
     let load = Button::new("Load Folder")
@@ -86,7 +90,8 @@ fn top_bar(s: &App) -> El {
         .key("top-bar")
         .w_full()
         .h(48.0)
-        .px(12.0)
+        .pl(leading_inset + 12.0)
+        .pr(12.0)
         .gap(8.0)
         .items_center()
         .fill(ink.recessed)
@@ -162,6 +167,17 @@ fn row_id(s: &App, i: usize) -> Cow<'_, str> {
     s.playlist.tracks[i].path.to_string_lossy()
 }
 
+/// What a right-click on a row offers. Ids are what `App::track_action` matches on.
+fn track_menu() -> PopupMenu {
+    PopupMenu::new()
+        .item(PopupItem::new("play", "Play").symbol("play.fill"))
+        .item(PopupItem::new("remove", "Remove from playlist").symbol("minus.circle"))
+        .separator()
+        .item(PopupItem::new("folder", "Open enclosing folder").symbol("folder"))
+        .item(PopupItem::new("tags", "Write BPM/Key tags").symbol("tag"))
+        .item(PopupItem::new("reanalyze", "Re-analyze BPM/Key").symbol("waveform"))
+}
+
 fn cell(s: &App, i: usize, column: &str) -> Cell {
     let ink = s.ink;
     let Some(t) = s.playlist.tracks.get(i) else { return Cell::text("") };
@@ -174,7 +190,17 @@ fn cell(s: &App, i: usize, column: &str) -> Cell {
     match column {
         "num" => Cell::text(t.track_number_label()).mono().muted(),
         "artist" => Cell::text(clean(&t.artist)),
-        "title" => Cell::el(title_cell(ink, t, s.playing_track == Some(i))),
+        "title" => Cell::el(title_cell(ink, t, s.playing_track == Some(i)).on_secondary_press(
+            move |_: &mut App, press: PointerPress, tx: &mut Tx| {
+                // The right-click menu, native (NSMenu on macOS), at the pointer.
+                tx.popup_menu(track_menu(), press, move |s: &mut App, picked, _tx| {
+                    if let Some(id) = picked {
+                        let id: String = id.into();
+                        s.track_action(i, &id);
+                    }
+                });
+            },
+        )),
         "duration" => Cell::text(t.duration_label()).mono(),
         "bpm" => Cell::text(t.bpm_label()).mono().color(value),
         "key" => Cell::text(t.key_label()).color(value),

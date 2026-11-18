@@ -353,6 +353,78 @@ impl App {
         self.audio_cache.retain(|path, _| keep.contains(path));
     }
 
+    // ---- Right-click actions ---------------------------------------------------------------
+
+    /// A pick from the row's context menu (ids from `view::track_menu`).
+    pub fn track_action(&mut self, index: usize, action: &str) {
+        match action {
+            "play" => self.request_play(index),
+            "remove" => self.remove_track(index),
+            "folder" => self.open_enclosing_folder(index),
+            "tags" => self.write_tags(index),
+            "reanalyze" => self.reanalyze(index),
+            _ => {}
+        }
+    }
+
+    /// Drop a row from the list (the file stays on disk), keeping the playing index right.
+    fn remove_track(&mut self, index: usize) {
+        let Some(removed) = self.playlist.remove_at(index) else { return };
+        self.audio_cache.remove(&removed.path);
+        self.waveform_cache.remove(&removed.path);
+        if self.pending_play.as_ref() == Some(&removed.path) {
+            self.pending_play = None;
+        }
+        match self.playing_track {
+            Some(playing) if playing == index => {
+                let _ = self.playback.unload();
+                self.playing_track = None;
+            }
+            Some(playing) if playing > index => self.playing_track = Some(playing - 1),
+            _ => {}
+        }
+        self.status_message = format!("Removed {} from playlist", removed.display_label());
+    }
+
+    fn open_enclosing_folder(&mut self, index: usize) {
+        let Some(track) = self.playlist.tracks.get(index) else { return };
+        self.status_message = match qinip::file_ops::open_enclosing_folder(&track.path) {
+            Ok(()) => format!("Opened {}", track.filename_label()),
+            Err(err) => err,
+        };
+    }
+
+    /// Fill missing TBPM/TKEY in the file (never overwrites), as the egui app's menu does.
+    fn write_tags(&mut self, index: usize) {
+        let Some(track) = self.playlist.tracks.get(index) else { return };
+        let label = track.display_label();
+        let (Some(bpm), Some(key)) = (track.bpm, track.key.clone()) else {
+            self.status_message = "Write tags needs BPM and Key: wait for analysis to finish.".to_string();
+            return;
+        };
+        self.status_message = match qinip::tags::write_analysis_tags(&track.path, bpm, &key) {
+            Ok(true) => format!("Wrote missing BPM/Key tags to {label}"),
+            Ok(false) => format!("BPM/Key tags already present on {label}, left intact"),
+            Err(err) => format!("Tag write failed: {err}"),
+        };
+    }
+
+    /// Forget the tagged or earlier values and let Qinip listen again.
+    fn reanalyze(&mut self, index: usize) {
+        let Some(track) = self.playlist.tracks.get_mut(index) else { return };
+        track.mark_for_reanalysis();
+        let path = track.path.clone();
+        let label = track.display_label();
+        if let Some(audio) = self.audio_cache.get(&path).map(Arc::clone) {
+            self.playlist.tracks[index].analysis = AnalysisState::Analyzing;
+            self.spawn_analysis(path, audio);
+        } else {
+            self.playlist.tracks[index].analysis = AnalysisState::Loading;
+            self.worker.enqueue(WorkerJob::LoadTrack { path, autoplay: false });
+        }
+        self.status_message = format!("Re-analyzing {label}…");
+    }
+
     // ---- Playback --------------------------------------------------------------------------
 
     /// The playlist index of a table row id (the track's path).
