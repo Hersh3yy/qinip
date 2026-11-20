@@ -3418,7 +3418,9 @@ version = "0.1.0"
 dependencies = [
  "qinip",
  "rune",
+ "rune-fx",
  "rune-kit",
+ "wgpu",
 ]
 
 [[package]]
@@ -3687,6 +3689,17 @@ dependencies = [
  "xkbcommon",
  "zbus 6.3.0",
  "zeroize",
+]
+
+[[package]]
+name = "rune-fx"
+version = "0.0.1"
+source = "git+https://github.com/anomalyco/rune?rev=3d037b49e459cd45d9438a46d50be3b20d53542a#3d037b49e459cd45d9438a46d50be3b20d53542a"
+dependencies = [
+ "bytemuck",
+ "rune-motion",
+ "rune-staging",
+ "wgpu",
 ]
 
 [[package]]

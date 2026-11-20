@@ -22,6 +22,12 @@ qinip = { path = ".." }
 rune = { git = "https://github.com/anomalyco/rune", rev = "3d037b49e459cd45d9438a46d50be3b20d53542a", features = ["tooling", "native-file-dialog"] }
 # Rune's component kit: the buttons and the virtualised playlist table.
 rune-kit = { git = "https://github.com/anomalyco/rune", rev = "3d037b49e459cd45d9438a46d50be3b20d53542a" }
+# Rune's effect layers (liquid metal, sparkles): what the Liquid Metal and Disco Ball skins are
+# painted with, through the compositor in `src/gfx.rs`. Same revision as `rune` above.
+rune-fx = { git = "https://github.com/anomalyco/rune", rev = "3d037b49e459cd45d9438a46d50be3b20d53542a" }
+# The GPU API Rune and rune-fx are built on; `src/gfx.rs` names a few of its types (a texture
+# format, device features, the frame-time query). Same version and features as rune-fx's own.
+wgpu = { version = "30", default-features = false, features = ["std", "parking_lot", "metal", "wgsl"] }
 
 # This crate is its own workspace root (the parent excludes it), which is what lets the
 # [patch] table below apply: Cargo honours [patch] only at a workspace root.

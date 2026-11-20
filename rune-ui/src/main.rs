@@ -1,15 +1,20 @@
 //! Qinip on Rune (spike): the entry point. It builds the Rune `AppSpec`, wires the frame
 //! hooks (`setup` hands over the waker for background threads, `poll` runs before every
-//! frame, `on_key` takes the space bar) and names the headless scenes the PNG renders use.
+//! frame, `on_key` takes the space bar), names the headless scenes the PNG renders use, and
+//! attaches the compositor (`gfx`) that paints the Liquid Metal and Disco Ball skins.
 //!
 //! Run the window:   cargo run -p qinip-rune [-- /folder/with/mp3s]
 //! Headless render:  cargo run -p qinip-rune -- --snap out.png --scene loaded /folder
 //! Element tree:     cargo run -p qinip-rune -- --tree tree.json --scene loaded /folder
+//! Skins headless:   cargo run -p qinip-rune -- --snap out.png --scene metal /folder
+//!                   cargo run -p qinip-rune -- --snap out.png --scene disco /folder
 //!
-//! The modules: `state` (playlist, worker, analysis, playback), `view` (the screen) and
-//! `colors` (Qinip's palette as Rune colours).
+//! The modules: `state` (playlist, worker, analysis, playback, the skin choice), `view` (the
+//! screen), `colors` (Qinip's palette as Rune colours) and `gfx` (the compositor that turns the
+//! view's effect slots into rune-fx liquid metal and sparkles).
 
 mod colors;
+mod gfx;
 mod state;
 mod view;
 
@@ -17,7 +22,7 @@ use std::time::Duration;
 
 use rune::{AppSpec, Key, KeyEvent, Tx, Waker};
 
-use state::App;
+use state::{App, Skin, WINDOW};
 
 fn setup(s: &mut App, waker: Waker) {
     s.attach_waker(waker);
@@ -50,7 +55,7 @@ fn on_key(s: &mut App, event: &KeyEvent, _tx: &mut Tx) -> bool {
 }
 
 fn main() {
-    rune::run(AppSpec::<App> {
+    let spec = AppSpec::<App> {
         // Named states for `--snap --scene <name>`; each modifies the fresh state.
         scenes: &[
             ("empty", |_| {}),
@@ -59,11 +64,25 @@ fn main() {
                 s.scene_load_sync();
                 s.scene_play_preview();
             }),
+            // The two skins, on the playing scene.
+            ("metal", |s| {
+                s.scene_load_sync();
+                s.scene_play_preview();
+                s.set_skin(Skin::LiquidMetal);
+            }),
+            ("disco", |s| {
+                s.scene_load_sync();
+                s.scene_play_preview();
+                s.set_skin(Skin::DiscoBall);
+            }),
         ],
         setup: Some(setup),
         poll: Some(poll),
         on_key: Some(on_key),
         min_size: Some((820.0, 520.0)),
-        ..AppSpec::new("Qinip on Rune", (1100.0, 700.0), App::new, view::view)
-    });
+        ..AppSpec::new("Qinip on Rune", WINDOW, App::new, view::view)
+    };
+    // `run_with` attaches the compositor: it draws every frame, in the window and headless
+    // alike, and paints the skins' effect slots. With the Flat skin there are none to paint.
+    rune::run_with(spec, gfx::Gfx::default());
 }

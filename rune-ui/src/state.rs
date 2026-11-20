@@ -11,6 +11,9 @@
 //!
 //! Rune draws only when something wakes it, so background threads call the `Waker` Rune
 //! hands over in `setup`, and `tick` (run before every frame) drains the channels.
+//!
+//! The look is two independent choices: the palette (`theme`, Qinip's seven) and the `Skin`
+//! (Flat, Liquid Metal, Disco Ball), both picked from the same pop-up menu in the top bar.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -23,7 +26,8 @@ use qinip::decode::{DecodedAudio, decode_to_samples};
 use qinip::eq::{BandWaveform, EqGains, band_waveform_peaks};
 use qinip::key::detect_key;
 use qinip::playback::PlaybackEngine;
-use qinip::playlist::{AnalysisState, Playlist, TrackEntry};
+use qinip::playlist::{AnalysisState, Playlist, SortColumn, SortDirection, TrackEntry};
+use rune_kit::SortDir;
 use qinip::theme::ThemeChoice;
 use qinip::worker::{AnalysisWorker, WorkerJob, WorkerUpdate};
 use rune::Waker;
@@ -33,6 +37,32 @@ use crate::colors::{self, Ink};
 
 /// Waveform resolution, as in src/worker.rs (used by the synchronous headless scenes).
 const WAVEFORM_PEAKS: usize = 800;
+
+/// The window's starting size in points (`AppSpec::size`), also what the view assumes until
+/// the root reports its real size (`App::note_window`).
+pub const WINDOW: (f32, f32) = (1100.0, 700.0);
+
+/// The look on top of the palette. `Flat` is the spike as it was; the other two place effect
+/// slots that `gfx.rs` paints with rune-fx liquid metal. Picking a palette keeps the skin and
+/// picking a skin keeps the palette.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Skin {
+    Flat,
+    LiquidMetal,
+    DiscoBall,
+}
+
+impl Skin {
+    /// The two menu entries after the palettes: `(menu id, label, skin)`.
+    pub const PICKS: [(&'static str, &'static str, Skin); 2] =
+        [("skin:metal", "Liquid Metal", Skin::LiquidMetal), ("skin:disco", "Disco Ball", Skin::DiscoBall)];
+
+    /// Both skins share these parts: chrome knob pots, chrome transport buttons, a chrome
+    /// border on the waveform screen, a gold border on the playing row.
+    pub fn metal_parts(self) -> bool {
+        self != Skin::Flat
+    }
+}
 
 /// One finished BPM/key analysis: `(bpm, beat offset, key name)`, or why it failed.
 pub struct AnalysisResult {
@@ -44,6 +74,10 @@ pub struct App {
     pub theme: ThemeChoice,
     pub ink: Ink,
     pub kit: Kit,
+    pub skin: Skin,
+    /// The root element's last laid-out size in points (`WINDOW` until the first layout);
+    /// the Disco Ball wall is sized from it.
+    pub window: (f32, f32),
     pub playlist: Playlist,
     /// rune-kit's table keeps the selection, keyboard cursor, sort and column widths here.
     pub table: TableState,
@@ -98,6 +132,8 @@ impl App {
             theme,
             ink,
             kit,
+            skin: Skin::Flat,
+            window: WINDOW,
             playlist: Playlist::new(),
             table: TableState::new().key("playlist"),
             playing_track: None,
@@ -159,6 +195,25 @@ impl App {
         if let Some(theme) = ThemeChoice::ALL.iter().copied().find(|t| t.label() == label) {
             self.set_theme(theme);
         }
+    }
+
+    pub fn set_skin(&mut self, skin: Skin) {
+        self.skin = skin;
+    }
+
+    /// A pick from the theme menu: a palette label, or a skin id from `Skin::PICKS`. Picking
+    /// the skin that is already on turns it off again (back to Flat), like a menu check mark.
+    pub fn pick_look(&mut self, id: &str) {
+        if let Some((_, _, skin)) = Skin::PICKS.iter().find(|(pick, _, _)| *pick == id) {
+            self.skin = if self.skin == *skin { Skin::Flat } else { *skin };
+        } else {
+            self.set_theme_by_label(id);
+        }
+    }
+
+    /// The root element reported its size (once after the first layout, then on resizes).
+    pub fn note_window(&mut self, w: f32, h: f32) {
+        self.window = (w, h);
     }
 
     // ---- Loading ---------------------------------------------------------------------------
@@ -355,6 +410,30 @@ impl App {
                 .map(|t| t.path.clone()),
         );
         self.audio_cache.retain(|path, _| keep.contains(path));
+    }
+
+    // ---- Sorting ---------------------------------------------------------------------------
+
+    /// A header click (column id from `view::playlist`, direction from the kit). The playing
+    /// track is found again by path afterwards, since rows move.
+    pub fn sort_by_column(&mut self, column: &str, dir: SortDir) {
+        let column = match column {
+            "num" => SortColumn::TrackNumber,
+            "artist" => SortColumn::Artist,
+            "title" => SortColumn::Title,
+            "duration" => SortColumn::Duration,
+            "bpm" => SortColumn::Bpm,
+            "key" => SortColumn::Key,
+            "camelot" => SortColumn::Camelot,
+            _ => return,
+        };
+        let direction = match dir {
+            SortDir::Ascending => SortDirection::Asc,
+            SortDir::Descending => SortDirection::Desc,
+        };
+        let playing = self.playing_track.and_then(|i| self.playlist.tracks.get(i)).map(|t| t.path.clone());
+        self.playlist.sort_by(column, direction);
+        self.playing_track = playing.as_deref().and_then(|p| self.playlist.index_of(p));
     }
 
     // ---- Right-click actions ---------------------------------------------------------------
