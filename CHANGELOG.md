@@ -6,6 +6,9 @@ Work in progress goes under **Unreleased**. `scripts/release.sh` turns that sect
 
 ## [Unreleased]
 
+### Fixed
+- Switching the Mac's output device while a track plays (AirPods on, a USB interface plugged in) no longer logs `audio stream error: default output device changed`; the sound follows the new device and the status line says so. When the device disappears and nothing replaces it, Qinip pauses, shows the audio banner, and reconnects by itself every two seconds; once an output is back it resumes the same track at the same position.
+
 ## [1.1.0] - 2026-11-12
 
 ### Added

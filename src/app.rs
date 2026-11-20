@@ -15,7 +15,10 @@ use crate::key::detect_key;
 use crate::knob::eq_knob;
 use crate::media::SystemMedia;
 use crate::selection::Selection;
-use crate::playback::PlaybackEngine;
+use crate::playback::{PlaybackEngine, StreamEvent};
+
+/// How often the UI tries to reopen a missing audio output.
+const AUDIO_RETRY_EVERY: std::time::Duration = std::time::Duration::from_secs(2);
 use crate::playlist::{AnalysisState, Playlist, SortColumn, SortDirection};
 use crate::rekordbox::{self, CrateTrack, Crates, ExportTarget, Setup as RekordboxSetup};
 use crate::tags;
@@ -215,6 +218,10 @@ pub struct QinipApp {
     system_media: Option<SystemMedia>,
     /// Set when there is no usable audio output; drives the banner + Retry.
     audio_error: Option<String>,
+    /// The track, position and play state when the output device vanished, restored by
+    /// `resume_after_audio_loss` once a device is back.
+    resume_after_audio: Option<(usize, f64, bool)>,
+    audio_retry_at: Option<std::time::Instant>,
     /// Active beat loop size (2/4/8/16), if any.
     loop_beats: Option<u32>,
     loop_start_secs: f64,
@@ -319,6 +326,8 @@ impl QinipApp {
             autoplay_preloaded: false,
             system_media,
             audio_error,
+            resume_after_audio: None,
+            audio_retry_at: None,
             loop_beats: None,
             loop_start_secs: 0.0,
             loop_end_secs: 0.0,
@@ -1490,22 +1499,88 @@ impl QinipApp {
         dev::log(format!("{beats}-beat loop: {start:.3}s..{end:.3}s"));
     }
 
-    /// Try to open the audio output again (after plugging in headphones etc.).
-    fn retry_audio_output(&mut self) {
+    /// Try to open the audio output again (after plugging in headphones etc.). `quiet` is
+    /// the automatic retry: it says nothing on failure so the status line is not spammed.
+    fn retry_audio_output(&mut self, quiet: bool) {
         match PlaybackEngine::new() {
             Ok(engine) => {
                 self.playback = engine;
                 let _ = self.playback.set_volume(self.volume);
                 let _ = self.playback.set_eq(self.eq);
-                self.playing_track = None;
                 self.audio_error = None;
+                self.audio_retry_at = None;
+                self.autoplay_preloaded = false;
+                self.upcoming = None;
                 self.status_message = "Audio output connected.".to_string();
                 dev::log("audio output reconnected");
+                self.resume_after_audio_loss();
             }
             Err(err) => {
                 self.audio_error = Some(err.to_string());
-                self.status_message = format!("Still no audio output: {err}");
+                if !quiet {
+                    self.status_message = format!("Still no audio output: {err}");
+                }
             }
+        }
+    }
+
+    /// After the output came back: reload the track that was playing when the device
+    /// vanished, at the same position, and keep playing if it was.
+    fn resume_after_audio_loss(&mut self) {
+        let Some((index, position, was_playing)) = self.resume_after_audio.take() else {
+            self.playing_track = None;
+            return;
+        };
+        let audio = self
+            .playlist
+            .tracks
+            .get(index)
+            .and_then(|t| self.audio_cache.get(&t.path))
+            .map(Arc::clone);
+        let Some(audio) = audio else {
+            self.playing_track = None;
+            return;
+        };
+        let _ = self.playback.load(audio);
+        let _ = self.playback.seek_secs(position);
+        if was_playing {
+            let _ = self.playback.play();
+        }
+        self.playing_track = Some(index);
+        self.status_message = "Audio output reconnected — resuming.".to_string();
+        dev::log(format!("resumed #{index} at {position:.1}s after audio loss"));
+    }
+
+    /// Output-device news from the stream's own threads (see `StreamEvent`). A changed
+    /// default device needs nothing: CoreAudio reroutes the running stream. A lost device
+    /// paused it for good; the engine drops the dead stream and the UI retries every
+    /// `AUDIO_RETRY_EVERY` until an output is back.
+    fn handle_stream_events(&mut self, ctx: &egui::Context) {
+        match self.playback.take_stream_event() {
+            StreamEvent::None => {}
+            StreamEvent::DeviceChanged => {
+                self.status_message = "Audio output switched to the new default device.".to_string();
+                dev::log("audio output rerouted");
+            }
+            StreamEvent::DeviceLost => {
+                let status = self.playback.status();
+                self.resume_after_audio = self
+                    .playing_track
+                    .map(|i| (i, status.position_secs(), status.is_playing()));
+                self.playback.drop_output();
+                self.audio_error = Some("audio device disconnected".to_string());
+                self.audio_retry_at = Some(std::time::Instant::now());
+                self.status_message =
+                    "Audio device disconnected — reconnecting when one is back…".to_string();
+                dev::log("audio output lost");
+            }
+        }
+        if self.audio_error.is_some() {
+            if self.audio_retry_at.is_none_or(|t| t.elapsed() >= AUDIO_RETRY_EVERY) {
+                self.audio_retry_at = Some(std::time::Instant::now());
+                self.retry_audio_output(true);
+            }
+            ctx.request_repaint_after(AUDIO_RETRY_EVERY);
         }
     }
 
@@ -2114,6 +2189,7 @@ impl eframe::App for QinipApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.apply_theme(ctx);
         self.playback.poll();
+        self.handle_stream_events(ctx);
         self.poll_worker();
         self.poll_system_media();
         self.handle_drops(ctx);
@@ -2239,7 +2315,7 @@ impl eframe::App for QinipApp {
                         .color(self.palette.accent_text),
                     );
                     if ui.button("Retry audio").clicked() {
-                        self.retry_audio_output();
+                        self.retry_audio_output(false);
                     }
                 });
             });

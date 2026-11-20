@@ -1,4 +1,4 @@
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, mpsc};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -75,6 +75,52 @@ struct SharedPlayback {
     loop_active: AtomicBool,
     loop_start_frame: AtomicU64,
     loop_end_frame: AtomicU64,
+    /// Latest news from the stream's own threads, as a `StreamEvent` code; `DeviceLost`
+    /// outranks `DeviceChanged` until the UI takes it.
+    stream_event: AtomicU8,
+}
+
+/// What the output stream reported since the UI last asked (`take_stream_event`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StreamEvent {
+    None,
+    /// The system default output changed and CoreAudio rerouted the running stream to it.
+    /// Nothing to do; the sound simply follows the new device.
+    DeviceChanged,
+    /// The device vanished (unplugged, Bluetooth dropped) and no default replaced it. cpal
+    /// paused the stream; it never resumes. Call `drop_output()` and open a new engine
+    /// once a device is back.
+    DeviceLost,
+}
+
+impl StreamEvent {
+    const CHANGED: u8 = 1;
+    const LOST: u8 = 2;
+
+    fn from_code(code: u8) -> Self {
+        match code {
+            Self::CHANGED => Self::DeviceChanged,
+            Self::LOST => Self::DeviceLost,
+            _ => Self::None,
+        }
+    }
+}
+
+/// The stream's error callback: device news becomes a `StreamEvent` for the UI thread;
+/// anything else is printed, as before.
+fn stream_error_sink(shared: Arc<SharedPlayback>) -> impl FnMut(cpal::Error) + Send + 'static {
+    move |err: cpal::Error| {
+        let code = match err.kind() {
+            cpal::ErrorKind::DeviceChanged => StreamEvent::CHANGED,
+            cpal::ErrorKind::DeviceNotAvailable => StreamEvent::LOST,
+            _ => {
+                eprintln!("audio stream error: {err}");
+                return;
+            }
+        };
+        shared.stream_event.fetch_max(code, Ordering::Relaxed);
+        dev::log(format!("audio stream: {err}"));
+    }
 }
 
 pub struct PlaybackEngine {
@@ -109,14 +155,13 @@ impl PlaybackEngine {
         let shared_cb = Arc::clone(&shared);
         let status_cb = Arc::clone(&status);
 
-        let err_fn = |err| eprintln!("audio stream error: {err}");
         let stream = match sample_format {
             SampleFormat::F32 => device.build_output_stream(
                 stream_config,
                 move |data: &mut [f32], _| {
                     render_output_f32(data, &shared_cb, &status_cb);
                 },
-                err_fn,
+                stream_error_sink(Arc::clone(&shared)),
                 None,
             )?,
             // I16/U16 devices: cpal wants ints, but `render_output_f32` only
@@ -131,7 +176,7 @@ impl PlaybackEngine {
                     move |data: &mut [i16], _| {
                         fill_from_f32_scratch(data, &mut scratch, &shared_cb, &status_cb);
                     },
-                    err_fn,
+                    stream_error_sink(Arc::clone(&shared)),
                     None,
                 )?
             }
@@ -142,7 +187,7 @@ impl PlaybackEngine {
                     move |data: &mut [u16], _| {
                         fill_from_f32_scratch(data, &mut scratch, &shared_cb, &status_cb);
                     },
-                    err_fn,
+                    stream_error_sink(Arc::clone(&shared)),
                     None,
                 )?
             }
@@ -166,6 +211,19 @@ impl PlaybackEngine {
 
     pub fn has_output(&self) -> bool {
         self.stream.is_some()
+    }
+
+    /// Device news since the last call, then cleared.
+    pub fn take_stream_event(&self) -> StreamEvent {
+        StreamEvent::from_code(self.shared.stream_event.swap(0, Ordering::Relaxed))
+    }
+
+    /// Forget a stream the host reported dead (`StreamEvent::DeviceLost`): `has_output()`
+    /// is false until a new engine is built, and nothing counts as playing meanwhile.
+    pub fn drop_output(&mut self) {
+        self.stream = None;
+        self.shared.playing.store(false, Ordering::Relaxed);
+        self.status.playing.store(false, Ordering::Relaxed);
     }
 
     fn from_parts(
@@ -211,6 +269,7 @@ impl PlaybackEngine {
             loop_active: AtomicBool::new(false),
             loop_start_frame: AtomicU64::new(0),
             loop_end_frame: AtomicU64::new(0),
+            stream_event: AtomicU8::new(0),
         });
 
         let status = Arc::new(PlaybackStatus {
@@ -679,4 +738,33 @@ fn resample_interleaved(
     }
 
     out
+}
+
+#[cfg(test)]
+mod stream_event_tests {
+    use super::*;
+
+    #[test]
+    fn events_are_taken_once_and_lost_outranks_changed() {
+        let engine = PlaybackEngine::silent();
+        assert_eq!(engine.take_stream_event(), StreamEvent::None);
+
+        engine.shared.stream_event.fetch_max(StreamEvent::CHANGED, Ordering::Relaxed);
+        assert_eq!(engine.take_stream_event(), StreamEvent::DeviceChanged);
+        assert_eq!(engine.take_stream_event(), StreamEvent::None);
+
+        engine.shared.stream_event.fetch_max(StreamEvent::LOST, Ordering::Relaxed);
+        engine.shared.stream_event.fetch_max(StreamEvent::CHANGED, Ordering::Relaxed);
+        assert_eq!(engine.take_stream_event(), StreamEvent::DeviceLost);
+    }
+
+    #[test]
+    fn drop_output_stops_playing_and_refuses_play() {
+        let mut engine = PlaybackEngine::silent();
+        engine.shared.playing.store(true, Ordering::Relaxed);
+        engine.drop_output();
+        assert!(!engine.has_output());
+        assert!(!engine.shared.playing.load(Ordering::Relaxed));
+        assert!(engine.play().is_err());
+    }
 }
