@@ -31,12 +31,14 @@ Scenes: `empty`, `loaded`, `playing`.
 ## What works
 
 Load Folder (native dialog), file drop, Clear Playlist, theme picker (all seven palettes), a
-virtualised playlist table (click selects, double-click or Return plays), the four-band
-waveform with click/drag seek, Previous / Play-Pause / Next / Stop, tempo light, volume slider,
-seek bar, space bar for play/pause.
+virtualised playlist table (click selects, double-click or Return plays, right-click menu:
+Play, Remove, Open enclosing folder, Write BPM/Key tags, Re-analyze), the four EQ knobs
+(drag up/down, double-click or right-click resets; they shape the sound and the waveform),
+the four-band waveform with click/drag seek, Previous / Play-Pause / Next / Stop, tempo light,
+volume slider, seek bar, space bar for play/pause.
 
-Not ported: EQ knobs, beat loops, multi-select, folder headers, rekordbox, tag writing, settings,
-media keys, About. All of that still lives only in the egui app.
+Not ported: beat loops, multi-select, folder headers, rekordbox playlists, Move to folder,
+Delete from disk, settings persistence, media keys, About. All of that still lives only in the egui app.
 
 ## Verdict (2026-11-17)
 

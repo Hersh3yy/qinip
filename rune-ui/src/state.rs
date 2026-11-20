@@ -20,7 +20,7 @@ use std::thread;
 
 use qinip::bpm::detect_bpm;
 use qinip::decode::{DecodedAudio, decode_to_samples};
-use qinip::eq::{BandWaveform, band_waveform_peaks};
+use qinip::eq::{BandWaveform, EqGains, band_waveform_peaks};
 use qinip::key::detect_key;
 use qinip::playback::PlaybackEngine;
 use qinip::playlist::{AnalysisState, Playlist, TrackEntry};
@@ -49,6 +49,8 @@ pub struct App {
     pub table: TableState,
     pub playing_track: Option<usize>,
     pub volume: f32,
+    /// The four EQ knobs, 0.0..=2.0 each (1.0 = unity), applied in the audio path.
+    pub eq: EqGains,
     /// Playback status mirrored once per frame by `tick`.
     pub position_secs: f64,
     pub duration_secs: f64,
@@ -100,6 +102,7 @@ impl App {
             table: TableState::new().key("playlist"),
             playing_track: None,
             volume: 0.8,
+            eq: EqGains::default(),
             position_secs: 0.0,
             duration_secs: 0.0,
             is_playing: false,
@@ -119,6 +122,7 @@ impl App {
             preview_position: None,
         };
         let _ = app.playback.set_volume(app.volume);
+        let _ = app.playback.set_eq(app.eq);
         // `cargo run -p qinip-rune -- /folder` loads that folder on launch. Headless scenes
         // load synchronously instead (`scene_load_sync`), so a snapshot is deterministic.
         if !headless
@@ -525,6 +529,32 @@ impl App {
     pub fn set_volume(&mut self, volume: f32) {
         self.volume = volume.clamp(0.0, 1.0);
         let _ = self.playback.set_volume(self.volume);
+    }
+
+    /// One EQ knob (0 = Low, 1 = LowMid, 2 = HiMid, 3 = Hi) to `gain`, 0..=2.
+    pub fn set_eq_band(&mut self, band: usize, gain: f32) {
+        let gain = gain.clamp(0.0, 2.0);
+        match band {
+            0 => self.eq.low = gain,
+            1 => self.eq.low_mid = gain,
+            2 => self.eq.hi_mid = gain,
+            _ => self.eq.hi = gain,
+        }
+        let _ = self.playback.set_eq(self.eq);
+    }
+
+    pub fn eq_band(&self, band: usize) -> f32 {
+        match band {
+            0 => self.eq.low,
+            1 => self.eq.low_mid,
+            2 => self.eq.hi_mid,
+            _ => self.eq.hi,
+        }
+    }
+
+    pub fn reset_eq(&mut self) {
+        self.eq = EqGains::default();
+        let _ = self.playback.set_eq(self.eq);
     }
 
     // ---- Reads for the view ----------------------------------------------------------------

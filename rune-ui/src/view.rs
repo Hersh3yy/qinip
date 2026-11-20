@@ -7,10 +7,11 @@ use std::borrow::Cow;
 
 use qinip::playlist::{AnalysisState, TrackEntry};
 use qinip::theme::ThemeChoice;
+use qinip::eq::BAND_LABELS;
 use qinip::transport::beat_phase;
 use rune::{
     Align, Color, Cursor, Cx, Drag, El, FileDialogOptions, LineCap, Phase, PointerPress, PopupItem, PopupMenu,
-    Shape, TextStyle, Tx, canvas, col, el, row, spacer, text,
+    Path, Shape, TextStyle, Tx, canvas, col, el, row, spacer, text,
 };
 use rune_kit::{Button, ButtonVariant, Cell, Table, TableColumn, TableState};
 
@@ -244,12 +245,17 @@ fn waveform(s: &App) -> El {
         let half = WAVE_H * 0.45;
         // One vertical line per peak and band, in the band's colour, as the egui painter does.
         for (b, peaks) in [&bands.low, &bands.low_mid, &bands.hi_mid, &bands.hi].into_iter().enumerate() {
-            let color = colors::band(b, 0.85);
+            // The EQ knob shapes what you hear and how visible the band is, as in the egui app.
+            let gain = s.eq_band(b);
+            if gain <= 0.001 {
+                continue;
+            }
+            let color = colors::band(b, (gain / 2.0 * 0.86).clamp(0.08, 0.86));
             let n = peaks.len().max(1) as f32;
             for (i, &(min, max)) in peaks.iter().enumerate() {
                 let x = (i as f32 + 0.5) / n * WAVE_W;
-                let top = mid - max.clamp(0.0, 1.0) * half;
-                let bottom = mid - min.clamp(-1.0, 0.0) * half;
+                let top = mid - (max * gain).clamp(0.0, 1.0) * half;
+                let bottom = mid - (min * gain).clamp(-1.0, 0.0) * half;
                 if bottom - top < 0.5 {
                     continue;
                 }
@@ -273,6 +279,7 @@ fn waveform(s: &App) -> El {
         .pb(8.0)
         .gap(4.0)
         .child(text(label).key("now-playing").font(TextStyle::new(13.0, 600.0)).color(ink.text).truncate())
+        .child(eq_row(s))
         .child(
             canvas(shape.view_box(WAVE_W, WAVE_H))
                 .key("waveform")
@@ -289,6 +296,106 @@ fn waveform(s: &App) -> El {
                     }
                 }),
         )
+}
+
+// ---- EQ knobs --------------------------------------------------------------------------------
+
+/// Knob geometry: a 44 pt box; the pointer sweeps 270° from 7 o'clock to 5 o'clock.
+const KNOB: f32 = 44.0;
+const SWEEP_START: f32 = std::f32::consts::FRAC_PI_2 + 0.75;
+const SWEEP_RANGE: f32 = std::f32::consts::TAU * 0.75;
+/// Vertical drag distance for the whole 0..200 % range.
+const DRAG_PX_FULL_RANGE: f32 = 140.0;
+
+/// "EQ" + the four knobs + Reset EQ, above the waveform, like the egui app.
+fn eq_row(s: &App) -> El {
+    let ink = s.ink;
+    let mut r = row()
+        .key("eq-row")
+        .w_full()
+        .gap(10.0)
+        .items_end()
+        .child(text("EQ").font(TextStyle::new(11.0, 600.0)).color(ink.text_weak).pb(14.0));
+    for band in 0..4 {
+        r = r.child(eq_knob(s, band));
+    }
+    let reset = Button::new("Reset EQ")
+        .variant(ButtonVariant::Ghost)
+        .on_press(|s: &mut App| s.reset_eq())
+        .build(&s.kit)
+        .key("reset-eq")
+        .mb(12.0);
+    r.child(reset)
+}
+
+/// One knob: band name above, the dial, the percentage below. Drag up or down to turn it;
+/// double-click or right-click resets the band to 100 %.
+fn eq_knob(s: &App, band: usize) -> El {
+    let ink = s.ink;
+    let gain = s.eq_band(band);
+    let accent = colors::band(band, 1.0);
+    let dial = canvas(knob_shape(ink, gain, accent).view_box(KNOB, KNOB))
+        .key(format!("eq-knob-{band}"))
+        .role("slider")
+        .label(BAND_LABELS[band])
+        .range_value(f64::from(gain) * 100.0, 0.0, 200.0)
+        .size(KNOB, KNOB)
+        .cursor(Cursor::Grab)
+        .instant_changes()
+        .on_drag(move |s: &mut App, d: &mut Drag, tx: &mut Tx| match d.phase {
+            // `d.data` keeps the value at the press, so the turn follows the finger exactly.
+            Phase::Down => d.data = s.eq_band(band),
+            Phase::Move => {
+                s.set_eq_band(band, d.data - d.dy / DRAG_PX_FULL_RANGE * 2.0);
+                tx.instant();
+            }
+            _ => {}
+        })
+        .on_double_press(move |s: &mut App| s.set_eq_band(band, 1.0))
+        .on_secondary_press(move |s: &mut App, _press: PointerPress, _tx: &mut Tx| s.set_eq_band(band, 1.0));
+    col()
+        .key(format!("eq-{band}"))
+        .items_center()
+        .gap(2.0)
+        .child(text(BAND_LABELS[band]).font(TextStyle::new(10.0, 700.0)).color(accent))
+        .child(dial)
+        .child(text(format!("{:.0}%", gain * 100.0)).font(MONO).color(ink.text))
+}
+
+/// The dial: a dim track arc, the lit arc up to the value, a dark pot, a pointer line.
+fn knob_shape(ink: Ink, gain: f32, accent: Color) -> Shape {
+    let c = [KNOB / 2.0, KNOB / 2.0];
+    let r = KNOB * 0.40;
+    let t = (gain / 2.0).clamp(0.0, 1.0);
+    let arc = |from: f32, to: f32, radius: f32| -> Path {
+        let steps = 40;
+        let mut p = Path::new();
+        for i in 0..=steps {
+            let a = from + (to - from) * i as f32 / steps as f32;
+            let pt = [c[0] + radius * a.cos(), c[1] + radius * a.sin()];
+            p = if i == 0 { p.move_to(pt) } else { p.line_to(pt) };
+        }
+        p
+    };
+    let circle = |radius: f32| -> Vec<[f32; 2]> {
+        (0..48)
+            .map(|i| {
+                let a = std::f32::consts::TAU * i as f32 / 48.0;
+                [c[0] + radius * a.cos(), c[1] + radius * a.sin()]
+            })
+            .collect()
+    };
+    let end = SWEEP_START + SWEEP_RANGE * t;
+    let pointer = [c[0] + (r - 3.0) * end.cos(), c[1] + (r - 3.0) * end.sin()];
+    let mut shape = Shape::new()
+        .stroke_path(&arc(SWEEP_START, SWEEP_START + SWEEP_RANGE, r + 4.0), 3.0, LineCap::Round, ink.tick_dim);
+    if t > 0.005 {
+        shape = shape.stroke_path(&arc(SWEEP_START, end, r + 4.0), 3.0, LineCap::Round, accent);
+    }
+    shape
+        .fill(circle(r), ink.recessed)
+        .stroke(circle(r), 1.0, ink.control_hover)
+        .line(c, pointer, 2.5, LineCap::Round, ink.text)
 }
 
 // ---- Bottom bar: transport, tempo light, clock, seek bar, volume -----------------------------
