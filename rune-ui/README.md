@@ -37,9 +37,12 @@ summary on stderr ends with the compositor's line: the GPU time per frame, avera
 
 Load Folder (native dialog), file drop, Clear Playlist, theme picker (all seven palettes), a
 virtualised playlist table (click selects, double-click or Return plays, right-click menu:
-Play, Remove, Open enclosing folder, Write BPM/Key tags, Re-analyze), the four EQ knobs
-(drag up/down, double-click or right-click resets; they shape the sound and the waveform),
-the four-band waveform with click/drag seek, Previous / Play-Pause / Next / Stop, tempo light,
+Play, Remove, Open enclosing folder, Write BPM/Key tags, Re-analyze; click a header to sort,
+click again to flip), the EQ as a mixer channel strip beside the waveform (HI at the top, LOW
+at the bottom like a DJM channel; a pot per band with a 0 dB detent mark, a bipolar arc in the
+band's colour and a dB readout; drag up/down turns it, double-click or right-click resets,
+RESET clears all four; they shape the sound and the waveform), the four-band waveform with
+click/drag seek, Previous / Play-Pause / Next / Stop, tempo light,
 volume slider, seek bar, space bar for play/pause.
 
 Two skins on top of the palettes, picked from the same Theme menu as two entries after a

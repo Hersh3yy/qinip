@@ -75,6 +75,14 @@ fn main() {
                 s.scene_play_preview();
                 s.set_skin(Skin::DiscoBall);
             }),
+            // The mixer strip with the knobs turned: HI cut, HI MID killed, LOW boosted.
+            ("eq", |s| {
+                s.scene_load_sync();
+                s.scene_play_preview();
+                s.set_eq_band(3, 0.7);
+                s.set_eq_band(2, 0.0);
+                s.set_eq_band(0, 1.6);
+            }),
         ],
         setup: Some(setup),
         poll: Some(poll),

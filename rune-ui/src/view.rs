@@ -32,7 +32,7 @@ use crate::state::{App, Skin, clean};
 /// The waveform is drawn in an 800 x 110 view box (one unit per peak) and stretched to the
 /// element, so the shape does not depend on the window's width.
 const WAVE_W: f32 = 800.0;
-const WAVE_H: f32 = 110.0;
+const WAVE_H: f32 = 170.0;
 /// Tabular digits, so the clock does not wobble as it counts.
 const MONO: TextStyle = TextStyle::new(12.0, 500.0).features("'tnum' 1");
 
@@ -417,61 +417,117 @@ fn waveform(s: &App) -> El {
                 tx.instant();
             }
         });
-    // With a skin on, a chrome tube runs along the screen's edge, painted after (over) it.
-    let screen = if s.skin.metal_parts() {
-        el().key("screen-frame")
-            .w_full()
-            .h(WAVE_H)
-            .child(screen)
-            .child(slab(CHROME_BORDER, [3.0, 0.0, 0.0, 0.0], 6.0).key("screen-border"))
-    } else {
-        screen
-    };
+    // The screen takes what the EQ strip leaves. With a skin on, a chrome tube runs along
+    // its edge, painted after (over) it.
+    let mut screen = el().key("screen-frame").grow(1.0).min_w(240.0).h(WAVE_H).child(screen);
+    if s.skin.metal_parts() {
+        screen = screen.child(slab(CHROME_BORDER, [3.0, 0.0, 0.0, 0.0], 6.0).key("screen-border"));
+    }
     let mut panel = col().key("waveform-panel").w_full().px(12.0).pb(8.0).gap(4.0);
     if s.skin == Skin::DiscoBall {
         panel = panel.fill(scrim(ink));
     }
     panel
         .child(text(label).key("now-playing").font(TextStyle::new(13.0, 600.0)).color(ink.text).truncate())
-        .child(eq_row(s))
-        .child(screen)
+        // The deck: the waveform screen with the mixer strip beside it.
+        .child(row().key("deck").w_full().h(WAVE_H).gap(8.0).items_stretch().child(screen).child(eq_strip(s)))
 }
 
-// ---- EQ knobs --------------------------------------------------------------------------------
+// ---- EQ: a mixer channel strip beside the waveform ------------------------------------------
 
-/// Knob geometry: a 44 pt box; the pot's radius; the pointer sweeps 270° from 7 o'clock to
-/// 5 o'clock.
-const KNOB: f32 = 44.0;
-const POT_R: f32 = KNOB * 0.40;
-const SWEEP_START: f32 = std::f32::consts::FRAC_PI_2 + 0.75;
-const SWEEP_RANGE: f32 = std::f32::consts::TAU * 0.75;
+/// The strip's width and the row each band gets; the knob is a 34 pt box with an 11 pt pot
+/// and a 7 pt cap.
+const STRIP_W: f32 = 184.0;
+const STRIP_ROW_H: f32 = 35.0;
+const KNOB: f32 = 34.0;
+const POT_R: f32 = 11.0;
+const CAP_R: f32 = 7.0;
+/// The pointer sweeps 270° from 7 o'clock (y points down, so 3π/4) to 5 o'clock; unity
+/// gain (0 dB) is straight up, like the centre detent on a mixer.
+const SWEEP_START: f32 = 3.0 * PI / 4.0;
+const SWEEP_RANGE: f32 = 1.5 * PI;
 /// Vertical drag distance for the whole 0..200 % range.
 const DRAG_PX_FULL_RANGE: f32 = 140.0;
+/// Top to bottom like a DJM channel: HI first, LOW last.
+const STRIP_ORDER: [usize; 4] = [3, 2, 1, 0];
+/// Silkscreen names, indexed by band.
+const MIXER_LABELS: [&str; 4] = ["LOW", "LOW MID", "HI MID", "HI"];
 
-/// "EQ" + the four knobs + Reset EQ, above the waveform, like the egui app.
-fn eq_row(s: &App) -> El {
+/// The channel strip: a faceplate with "EQ" and a Reset button on top, then one row per band
+/// (name, pot, dB readout). With a skin on, a chrome tube frames the plate like the screen.
+fn eq_strip(s: &App) -> El {
     let ink = s.ink;
-    let mut r = row()
-        .key("eq-row")
-        .w_full()
-        .gap(10.0)
-        .items_end()
-        .child(text("EQ").font(TextStyle::new(11.0, 600.0)).color(ink.text_weak).pb(14.0));
-    for band in 0..4 {
-        r = r.child(eq_knob(s, band));
-    }
-    let reset = Button::new("Reset EQ")
-        .variant(quiet(s))
+    let reset = el()
+        .key("eq-reset")
+        .role("button")
+        .label("Reset EQ")
+        .focusable(true)
+        .px(7.0)
+        .py(2.0)
+        .radius(4.0)
+        .fill(ink.control)
+        .hover(ink.control_hover)
+        .press(ink.accent.alpha(0.35))
+        .cursor(Cursor::Pointer)
         .on_press(|s: &mut App| s.reset_eq())
-        .build(&s.kit)
-        .key("reset-eq")
-        .mb(12.0);
-    r.child(reset)
+        .child(text("RESET").font(TextStyle::new(9.0, 700.0)).color(ink.text_weak));
+    let header = row()
+        .key("eq-header")
+        .w_full()
+        .h(18.0)
+        .items_center()
+        .justify_between()
+        .child(text("EQ").font(TextStyle::new(10.0, 700.0)).color(ink.text_weak))
+        .child(reset);
+    let mut plate = col()
+        .key("eq-strip")
+        .w(STRIP_W)
+        .h(WAVE_H)
+        .px(10.0)
+        .py(6.0)
+        .radius(6.0)
+        .fill(ink.recessed)
+        .border(1.0, ink.tick_dim)
+        .child(header);
+    for band in STRIP_ORDER {
+        plate = plate.child(eq_row(s, band));
+    }
+    if s.skin.metal_parts() {
+        el().key("eq-frame")
+            .w(STRIP_W)
+            .h(WAVE_H)
+            .child(plate)
+            .child(slab(CHROME_BORDER, [3.0, 0.0, 0.0, 0.0], 6.0).key("eq-border"))
+    } else {
+        plate
+    }
 }
 
-/// One knob: band name above, the dial, the percentage below. Drag up or down to turn it;
-/// double-click or right-click resets the band to 100 %. With a skin on, the pot is a chrome
-/// disc the compositor paints under the dial's arcs and pointer.
+/// One band of the strip: the name in the band's colour, the pot, the gain in dB.
+fn eq_row(s: &App, band: usize) -> El {
+    let ink = s.ink;
+    row()
+        .key(format!("eq-{band}"))
+        .w_full()
+        .h(STRIP_ROW_H)
+        .items_center()
+        .gap(8.0)
+        .child(text(MIXER_LABELS[band]).font(TextStyle::new(10.0, 700.0)).color(colors::band(band, 1.0)).w(54.0))
+        .child(eq_knob(s, band))
+        .child(text(db_label(s.eq_band(band))).font(MONO).color(ink.text_weak))
+}
+
+/// The readout a mixer prints: 100 % is 0 dB, 200 % is +6 dB, 0 % is silence.
+fn db_label(gain: f32) -> String {
+    if gain <= 0.001 {
+        return "-inf dB".to_string();
+    }
+    let db = 20.0 * gain.log10();
+    if db.abs() < 0.05 { "0.0 dB".to_string() } else { format!("{db:+.1} dB") }
+}
+
+/// The pot. Drag up or down to turn it; double-click or right-click resets the band to 0 dB.
+/// With a skin on, the compositor paints a chrome pot under the dial's drawing.
 fn eq_knob(s: &App, band: usize) -> El {
     let ink = s.ink;
     let gain = s.eq_band(band);
@@ -496,7 +552,7 @@ fn eq_knob(s: &App, band: usize) -> El {
         })
         .on_double_press(move |s: &mut App| s.set_eq_band(band, 1.0))
         .on_secondary_press(move |s: &mut App, _press: PointerPress, _tx: &mut Tx| s.set_eq_band(band, 1.0));
-    let dial = if metal {
+    if metal {
         // The chrome pot: a circle slot the size of the pot, placed before (under) the dial.
         let pot = rune::effect(CHROME_FILL)
             .effect_data([5.0, 0.7, 0.0, 0.0])
@@ -506,58 +562,63 @@ fn eq_knob(s: &App, band: usize) -> El {
         el().key(format!("eq-pot-{band}")).size(KNOB, KNOB).child(pot).child(dial)
     } else {
         dial
-    };
-    col()
-        .key(format!("eq-{band}"))
-        .items_center()
-        .gap(2.0)
-        .child(text(BAND_LABELS[band]).font(TextStyle::new(10.0, 700.0)).color(accent))
-        .child(dial)
-        .child(text(format!("{:.0}%", gain * 100.0)).font(MONO).color(ink.text))
+    }
 }
 
-/// The dial: a dim track arc, the lit arc up to the value, the pot (flat skin only; the
-/// compositor paints a chrome one otherwise), a pointer line. On chrome the pointer is dark
-/// with a light outline, so it reads on both the bright sky and the dark floor of the metal.
-fn knob_shape(ink: Ink, gain: f32, accent: Color, metal: bool, pointer_ink: Color) -> Shape {
+/// The dial drawing: a scale of 13 ticks over the sweep with a longer 0 dB mark at the top,
+/// a bipolar arc in the band's colour from 0 dB to the value (boost clockwise, cut counter-
+/// clockwise), the black skirt with a rim light top-left and a shadow bottom-right, a raised
+/// cap, and the white pointer. On chrome the skirt and cap fills are left to the compositor
+/// and the pointer is dark with a light outline, so it reads on both the bright sky and the
+/// dark floor of the metal.
+fn knob_shape(ink: Ink, gain: f32, accent: Color, metal: bool, metal_pointer: Color) -> Shape {
     let c = [KNOB / 2.0, KNOB / 2.0];
-    let r = POT_R;
     let t = (gain / 2.0).clamp(0.0, 1.0);
+    let at = |angle: f32, radius: f32| [c[0] + radius * angle.cos(), c[1] + radius * angle.sin()];
     let arc = |from: f32, to: f32, radius: f32| -> Path {
         let steps = 40;
         let mut p = Path::new();
         for i in 0..=steps {
             let a = from + (to - from) * i as f32 / steps as f32;
-            let pt = [c[0] + radius * a.cos(), c[1] + radius * a.sin()];
-            p = if i == 0 { p.move_to(pt) } else { p.line_to(pt) };
+            p = if i == 0 { p.move_to(at(a, radius)) } else { p.line_to(at(a, radius)) };
         }
         p
     };
-    let circle = |radius: f32| -> Vec<[f32; 2]> {
-        (0..48)
-            .map(|i| {
-                let a = std::f32::consts::TAU * i as f32 / 48.0;
-                [c[0] + radius * a.cos(), c[1] + radius * a.sin()]
-            })
-            .collect()
-    };
-    let end = SWEEP_START + SWEEP_RANGE * t;
-    let pointer = [c[0] + (r - 3.0) * end.cos(), c[1] + (r - 3.0) * end.sin()];
-    let mut shape = Shape::new()
-        .stroke_path(&arc(SWEEP_START, SWEEP_START + SWEEP_RANGE, r + 4.0), 3.0, LineCap::Round, ink.tick_dim);
-    if t > 0.005 {
-        shape = shape.stroke_path(&arc(SWEEP_START, end, r + 4.0), 3.0, LineCap::Round, accent);
+    let circle = |radius: f32| -> Vec<[f32; 2]> { (0..=48).map(|i| at(TAU * i as f32 / 48.0, radius)).collect() };
+    let white = colors::rgb(255, 255, 255);
+    let black = colors::rgb(0, 0, 0);
+    let centre = SWEEP_START + SWEEP_RANGE * 0.5;
+    let value = SWEEP_START + SWEEP_RANGE * t;
+
+    let mut shape = Shape::new();
+    for i in 0..=12 {
+        let a = SWEEP_START + SWEEP_RANGE * i as f32 / 12.0;
+        let (inner, outer, width, color) = if i == 6 {
+            (13.0, 16.5, 1.5, ink.text.alpha(0.85))
+        } else {
+            (13.5, 15.5, 1.0, ink.tick_dim)
+        };
+        shape = shape.line(at(a, inner), at(a, outer), width, LineCap::Butt, color);
     }
-    if metal {
-        shape
-            .stroke(circle(r), 1.0, colors::rgb(0, 0, 0).alpha(0.45))
-            .line(c, pointer, 4.5, LineCap::Round, colors::rgb(255, 255, 255).alpha(0.85))
-            .line(c, pointer, 2.0, LineCap::Round, pointer_ink)
+    if (t - 0.5).abs() > 0.004 {
+        shape = shape.stroke_path(&arc(centre, value, 12.3), 2.0, LineCap::Round, accent);
+    }
+    shape = if metal {
+        shape.stroke(circle(POT_R + 0.5), 1.0, black.alpha(0.5)).stroke(circle(CAP_R), 1.0, black.alpha(0.35))
     } else {
         shape
-            .fill(circle(r), ink.recessed)
-            .stroke(circle(r), 1.0, ink.control_hover)
-            .line(c, pointer, 2.5, LineCap::Round, pointer_ink)
+            .stroke(circle(POT_R + 0.6), 1.2, black.alpha(0.45))
+            .fill(circle(POT_R), colors::rgb(30, 30, 34))
+            .stroke_path(&arc(1.05 * PI, 1.45 * PI, POT_R - 0.6), 1.2, LineCap::Round, white.alpha(0.22))
+            .stroke_path(&arc(0.05 * PI, 0.45 * PI, POT_R - 0.6), 1.2, LineCap::Round, black.alpha(0.5))
+            .fill(circle(CAP_R), colors::rgb(48, 48, 54))
+            .stroke(circle(CAP_R), 1.0, white.alpha(0.10))
+    };
+    let (from, to) = (at(value, 2.5), at(value, POT_R - 0.8));
+    if metal {
+        shape.line(from, to, 4.0, LineCap::Round, white.alpha(0.85)).line(from, to, 2.0, LineCap::Round, metal_pointer)
+    } else {
+        shape.line(from, to, 2.2, LineCap::Round, white.alpha(0.92))
     }
 }
 
