@@ -69,6 +69,8 @@ Delete from disk, settings persistence, media keys, About. All of that still liv
 
 ## Verdict (2026-11-17)
 
+*Update 2026-11-20: Hiren chose to continue 2.0 on Rune regardless; since then: the two skins, sortable headers, the mixer strip. The caveats below still hold.*
+
 Stay on egui for shipping. Rune compiled first try and the headless tooling is excellent (file
 dialogs, drops and menus can be scripted; egui_kittest cannot), the table and the rendering are
 better than the hand-rolled egui playlist, and the result looks more native. Against it: 296

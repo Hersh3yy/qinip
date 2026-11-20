@@ -11,11 +11,11 @@
 
 **What it is** · Free MP3 pack-audition player for macOS/Windows: playlist, coloured 4-band waveform, EQ knobs, background BPM/key/Camelot analysis, gapless autoplay.
 **Stack** · Rust, egui/eframe (immediate-mode GUI), cpal (audio out), symphonia (MP3 decode), rustfft (Qinip's own tempo + key detection), souvlaki (OS media controls), id3 (tag read/write), egui_kittest (headless UI tests).
-**Status** · 🟡 v1.1.0 is built and published (dmg + zip, installer + zip, checksums, changelog on the page), **but the GitHub repo is still private, so nobody can download it**: every release link 404s for the public. One decision unblocks the launch: make the repo public (history scanned clean apart from the ZHU test MP3). `master` = the release, work continues on `feat/1.2`. Still unverified by a human: the Windows installer on a real PC, media keys in the bundle.
-**Repo** · git@github.com:Hersh3yy/qinip.git · working on `feat/2.0-rune` (merge to `master` only when sure; releases only via `release.sh` / the Cut release button). Released: 1.1.0; `Cargo.toml` stays 1.1.0 until the next cut.
+**Status** · 🟢 v1.1.0 is public since 2026-11-20: the repo is public and every `releases/latest/download/` link redirects to its asset. `master` = v1.1.0 + an unreleased output-device fix + the `rune-ui/` 2.0 work (own workspace; the shipped app is untouched by it). Next: the Instagram post (p16), a human click-through of Qinip Rune (p21). Still unverified by a human: the Windows installer on a real PC, media keys in the bundle.
+**Repo** · git@github.com:Hersh3yy/qinip.git · working on `feat/2.0-rune`, fast-forwarded into `master` on 2026-11-20 and kept as the working branch (merge to `master` only when sure; releases only via `release.sh` / the Cut release button). Released: 1.1.0; `Cargo.toml` stays 1.1.0 until the next cut.
 **Hosting** · Desktop app. Distributed as GitHub Releases (`Qinip.app` zip for macOS arm64, `Qinip.exe` zip for Windows x64).
 **ClickUp** · not linked
-**Last assessed** · 2026-11-17
+**Last assessed** · 2026-11-20
 
 ---
 
@@ -67,13 +67,12 @@ Plain-words version, with the why and the launch checklist: `docs/releasing.md`.
 
 ## Status
 
-v1.0.0 is the last public release (2026-07-21). Everything since is on `feat/multiselect-folders-media`, merged with `master` (Hiren's Clear Playlist + move dialog), listed under Unreleased in `CHANGELOG.md`, and ready for `./scripts/release.sh 1.1.0`. This session's audit-driven pass fixed the launch blockers (see Diary 2026-11-05), replaced aubio with Qinip's own tempogram (BPM within 0.1 of tags on all six test tracks; the beat phase drives the tempo light and loop snapping), reads BPM/key from file tags, added Red/Forest Green themes, and added headless UI tests that render every theme. Still unverified by a human: the Windows zip (it cross-compiles), media keys in the bundle. Licence stays GPL-3.0-or-later; with aubio gone it is now a choice, not an obligation.
+v1.1.0 (2026-11-12) is the public release; the repo went public on 2026-11-20, so the README's download links work for everyone. `master` carries two unreleased things: the output-device fix (a changed default device is followed quietly, a lost one is reconnected and playback resumes) under Unreleased in `CHANGELOG.md`, and `rune-ui/`, the 2.0 experiment on Rune (own workspace: Flat, Liquid Metal and Disco Ball skins, sortable table, the EQ as a mixer channel strip beside the waveform), installed as `~/Applications/Qinip Rune.app` by `rune-ui/make-app.sh`. Still unverified by a human: the Windows installer on a real PC, media keys in the bundle, header sorting and the knobs in Qinip Rune (headless snapshots only). Licence stays GPL-3.0-or-later; with aubio gone it is a choice, not an obligation.
 
 ## Issues
 
 | Sev | Issue | Where |
 |---|---|---|
-| release-blocker | The repository is **private**, so the v1.1.0 release page and `releases/latest/download/...` links return 404 to everyone but Hiren. Options: make it public now; scrub the ZHU MP3 from history first (filter-repo + force push + re-tag), then public; or stay private and host the files on itch.io / the website. Hiren's call; nothing else is in the way. | GitHub settings, `README.md` links, `docs/launch/instagram-post.md` |
 | warning | The **Cut release** button (`cut-release.yml`) has never run. v1.1.0 was cut from the terminal. Try it once with "Only check" before relying on it. | `.github/workflows/cut-release.yml` |
 | serious | No human has run the Windows build. It cross-compiles and the launch crash (souvlaki needing an HWND) is fixed by passing the window handle, but media keys and the whole UI are untested there. | `src/app.rs` (`init_system_media`), CI Windows job |
 | serious | Mac builds are ad-hoc signed: users get the "Open Anyway" dance once. Needs the paid Apple Developer account or a sponsor. | `scripts/package-macos.sh` |
@@ -159,6 +158,10 @@ sequenceDiagram
 
 🗣️ **Say it to a senior** — "When you delete several rows from a vector-backed list in one pass, you remove from the bottom up so the surviving indices don't shift under you."
 
+### macOS output-device changes: CoreAudio reroutes, then cpal "errors"
+
+Qinip opens the *default output* AudioUnit, not one device. When the user switches to AirPods, CoreAudio reroutes that unit by itself and keeps converting from the stream's sample rate, so the sound never stops. cpal 0.18 still calls the stream's error callback with `ErrorKind::DeviceChanged` ("default output device changed") so the app can react; Qinip printed it as an error and did nothing else, which was almost right. Only `DeviceNotAvailable` means the stream is dead: cpal pauses it and nothing resumes it, so a new engine must be built once a device exists. The callback runs on cpal's monitor thread, so `src/playback.rs` (`stream_error_sink`) only stores an `AtomicU8` event; `src/app.rs` (`handle_stream_events`) reads it once per frame, remembers track, position and play state, drops the stream, retries every two seconds and resumes.
+
 ### Folder separators only make sense in load-order view
 
 🔭 **What it does** — A "this track came from folder X" grouping is only meaningful while the list is in append order. The moment the user sorts by BPM/Artist/etc., rows from different folders interleave and any separator becomes noise. So folder grouping has to be conditional on `playlist_sort == None`.
@@ -167,20 +170,24 @@ sequenceDiagram
 
 ## Roadmap — near future
 
-v1.1.0 is published but invisible (private repo). First item unblocks everything else.
+v1.1.0 is public. Next: the post, then a human pass over Qinip Rune, then the Cut-release button.
 
-- [ ] Decide and do: make the repo public (or scrub the ZHU MP3 first, or host the downloads elsewhere). Then re-test the four `releases/latest/download/` links in a private browser window; they must redirect, not 404. <!-- id:p14 cu:123kjkdqc95 -->
+- [x] Decide and do: make the repo public. Done 2026-11-20 (history scanned for keys first: clean; the ZHU MP3 stays by Hiren's decision); the dmg link now 302s to the v1.1.0 asset. <!-- id:p14 cu:123kjkdqc95 -->
 - [ ] Test the Cut release button once: Actions → Cut release → version `1.1.1` → tick "Only check". It must end green without committing anything. <!-- id:p15 cu:123kjkdqc96 -->
 - [ ] Post: `docs/launch/instagram-post.md`, after p14 and after downloading the dmg yourself in Safari. <!-- id:p16 cu:123kjkdqc97 -->
-- [x] 2.0 spike: Qinip's screen rebuilt on Rune as `rune-ui/` (own workspace, binary `qinip-rune`, pinned dev rev 3d037b4). Parts a–e work, verified headless. Verdict: stay on egui for shipping; Rune is the 2.0 candidate once it settles (see `rune-ui/README.md`). <!-- id:p17 -->
-- [ ] 1.2 / 1.3 features: collected by Hiren while using 1.1.0 this week; add here as they come. <!-- id:p18 -->
+- [x] 2.0 spike: Qinip's screen rebuilt on Rune as `rune-ui/` (own workspace, binary `qinip-rune`, pinned dev rev 3d037b4). Parts a–e work, verified headless. Verdict: stay on egui for shipping; Rune is the 2.0 candidate once it settles (see `rune-ui/README.md`). <!-- id:p17 cu:123kjkdqv03 -->
+- [ ] 1.2 / 1.3 features: collected by Hiren while using 1.1.0 this week; add here as they come. <!-- id:p18 cu:123kjkdqv04 -->
+- [x] Audio follows the output device: a changed default is followed quietly (CoreAudio reroutes; the old code printed it as an error), a lost device drops the stream, retries every 2 s and resumes the same track at the same position. Unreleased. <!-- id:p19 cu:123kjkdqv05 -->
+- [x] Rune: Liquid Metal and Disco Ball skins (rune-fx compositor in `rune-ui/src/gfx.rs`), every header sortable, 40 pt top bar, the EQ as a mixer channel strip beside the waveform (HI→LOW, 0 dB detent, bipolar arcs, dB readouts). Verified by headless snapshots only. <!-- id:p20 cu:123kjkdqv06 -->
+- [ ] Click through Qinip Rune by hand: header sort on all seven columns both ways, knob drag and reset, the two skins on each palette, the context menu. Then decide what 1.2 ships and what waits for 2.0. <!-- id:p21 cu:123kjkdqv07 -->
+- [x] `feat/2.0-rune` fast-forwarded into `master` (2026-11-20); the Rune work ships nothing until a release is cut. <!-- id:p22 cu:123kjkdqv08 -->
 
 - [ ] Verify system play/pause in the packaged `Qinip.app` (media keys, Control Center, Bluetooth headphone button). If it fails there too, dig into souvlaki registration. <!-- id:n1 cu:123kjkdmpx9 -->
 - [x] Multi-select + batch delete (Shift/Cmd click, Cmd+A, Esc, Backspace removes the set high→low). <!-- id:n2 cu:123kjkdmpxa -->
 - [x] Folder group headers in load-order view, driven by `TrackEntry::source_folder`. <!-- id:n3 cu:123kjkdmpxb -->
 - [x] Multi-folder / folder+file drop loads everything. <!-- id:n4 cu:123kjkdmpxd -->
 - [x] Feature branch + WIP committed as a fallback point. <!-- id:n5 cu:123kjkdmpxe -->
-- [ ] Hiren test-drives the new selection UX and folder headers in the bundle; adjust by feel. <!-- id:n6 cu:123kjkdmpxf -->
+- [x] Hiren test-drives the new selection UX and folder headers in the bundle; adjust by feel. <!-- id:n6 cu:123kjkdmpxf -->
 - [x] Release pipeline: `package-macos.sh` does Developer ID + hardened runtime + notarize + staple + dmg when `SIGN_IDENTITY` / `NOTARY_PROFILE` are set, ad-hoc otherwise; empty `scripts/qinip.entitlements`. <!-- id:r1 cu:123kjkdmpxg -->
 - [x] CI: `release.yml` imports the cert and notary key from secrets when present, uploads dmg + zip. <!-- id:r2 cu:123kjkdmpxh -->
 - [ ] Hiren: enroll Apple Developer Program, make the Developer ID Application cert, `notarytool store-credentials`, run the script once with both vars, then add the 6 GitHub secrets. <!-- id:r1b cu:123kjkdmpxj -->
@@ -218,7 +225,7 @@ v1.1.0 is published but invisible (private repo). First item unblocks everything
 - [ ] Bar counter / metronome on the beat grid: period and phase exist now (`bpm.rs`), the tempo light and loops use them; what's missing is the downbeat (which beat is 1), e.g. the phase among the four whose beats carry the most Low-band energy, plus a "set beat 1 here" nudge. Then a 1-2-3-4 readout and a click track. <!-- id:f7 cu:123kjkdmpy8 -->
   Plan: (1) keep aubio's per-beat times during analysis, not just the BPM; (2) refine BPM with a line fit through them, grid phase = circular mean of beat-time mod period; (3) guess the downbeat as the phase whose beats carry the most Low-band energy (kick on the 1); (4) a "set beat 1 here" nudge for when the guess is wrong, like Rekordbox's grid adjust; (5) counter and loop buttons snap to the grid; (6) metronome = a click mixed in the audio callback at grid times. About two sessions.
 - [x] Rekordbox bridge via rekordbox XML, the import format Pioneer documents and Rekordbox 6/7 read. Qinip keeps its own playlists and writes them to one XML file; right-click → "Add to Rekordbox playlist ▸ <name> / New…". One-time Rekordbox setup (Preferences > Advanced > Database > rekordbox xml; show "rekordbox xml" in the tree), then refresh + Import in Rekordbox. Not writing Rekordbox's own `master.db` (encrypted, undocumented, can corrupt the library). Check against Hiren's Rekordbox version first. <!-- id:f9 cu:123kjkdpum2 -->
-- [ ] Revisit Rune for 2.0: re-run the `rune-ui/` spike against a newer rev (or the first crates.io release); go if the weekly breaking changes have stopped and the kit has sliders/knobs. Porting list is in `rune-ui/README.md` ("Not ported"). <!-- id:f10 -->
+- [x] Revisit Rune for 2.0: decided 2026-11-20, 2.0 continues on Rune now (`feat/2.0-rune`); the kit's table sorts, the knobs are hand-drawn. Porting list is in `rune-ui/README.md` ("Not ported"). <!-- id:f10 cu:123kjkdqv09 -->
 - [ ] Velopack auto-update (replaces the p6 banner with in-app updates). <!-- id:f8 cu:123kjkdmpy9 -->
 
 ---
@@ -226,6 +233,12 @@ v1.1.0 is published but invisible (private repo). First item unblocks everything
 ## Diary
 
 <!-- Newest first. One entry per working session. Terse, factual, honest. Append only. -->
+
+### 2026-11-20 — repo public; output-device fix; Rune skins, sorting, mixer strip
+- Hiren approved the three open decisions in one message. Repo made public (`gh repo edit --visibility public`) after a key scan over all history (clean; the ZHU MP3 stays by his decision). The dmg download link 302s to the v1.1.0 asset. p14 done, p16 (post) unblocked.
+- Audio: cpal 0.18.2 reroutes a running stream itself when the macOS default output changes and reports it as `ErrorKind::DeviceChanged`; Qinip printed it as `audio stream error`. Now a `StreamEvent` carries device news to the UI: a change only updates the status line; a lost device drops the dead stream, shows the audio banner, retries every 2 s and resumes the same track at the same position (`3bf03b4`). Two new unit tests, 34 pass, clippy clean, changelog entry under Unreleased.
+- Rune: Liquid Metal and Disco Ball skins through a rune-fx `Compositor` (`rune-ui/src/gfx.rs`); header sorting (the bug: no column was `.sortable()` and there was no `on_sort`); top bar 40 pt (`9a53d8a`). Then Hiren's ask for mixer-style knobs in a better place: the EQ is a channel strip beside the waveform, HI→LOW, 0 dB detent, bipolar arcs, dB readouts; deck 170 pt (`98deba5`). All checked through headless `--snap --scene playing|metal|disco|eq` PNGs; nothing clicked by a human yet (p21).
+- `feat/2.0-rune` fast-forwarded into `master` and pushed; branch kept. `~/Applications/Qinip Rune.app` rebuilt by `rune-ui/make-app.sh`.
 
 ### 2026-11-17 — branch for 2.0 on Rune
 - `feat/2.0-rune` branched from `feat/1.2`, which is deleted (local + origin); one working branch. Released version stays 1.1.0.
